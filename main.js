@@ -253,19 +253,13 @@ function drawScene(canvas) {
   ctx.fillStyle = '#0d1118';
   ctx.fillRect(0, 0, widthCss, heightCss);
 
-  // Dessine murs
+  // Dessine murs avec texture bruitée fine (avant la grille)
   if (state.tiles) {
-    ctx.fillStyle = '#4b3a2c'; // marron foncé
-    for (let y = 0; y < state.rows; y++) {
-      for (let x = 0; x < state.cols; x++) {
-        if (state.tiles[y][x]) {
-          ctx.fillRect(ox + x * tile, oy + y * tile, tile, tile);
-        }
-      }
-    }
+    const tex = getOrCreateWallTexture(tile);
+    if (tex) ctx.drawImage(tex, ox, oy);
   }
 
-  // Grille discrète
+  // Grille discrète (dessinée APRÈS, pour qu'elle recouvre murs et sol)
   ctx.globalAlpha = 0.10;
   ctx.strokeStyle = '#2a3244';
   ctx.beginPath();
@@ -286,6 +280,42 @@ function drawScene(canvas) {
   }
 
   ctx.restore();
+}
+
+// Cache pour éviter de reconstruire la texture si le tile ne change pas
+let wallTextureCache = { tile: 0, canvas: null };
+function getOrCreateWallTexture(tile) {
+  if (wallTextureCache.canvas && wallTextureCache.tile === tile) return wallTextureCache.canvas;
+  const w = state.cols * tile;
+  const h = state.rows * tile;
+  const off = document.createElement('canvas');
+  off.width = w; off.height = h;
+  const octx = off.getContext('2d');
+  const img = octx.createImageData(w, h);
+  const data = img.data;
+  const base = hexToRgb('#4b3a2c');
+  // fréquence du bruit, légèrement augmentée
+  const scale = 0.095; // plus petit -> motifs larges, plus grand -> motifs fins
+  for (let y = 0; y < h; y++) {
+    const ty = Math.floor(y / tile);
+    for (let x = 0; x < w; x++) {
+      const tx = Math.floor(x / tile);
+      const idx = (y * w + x) * 4;
+      if (!state.tiles[ty] || !state.tiles[ty][tx]) { data[idx+3] = 0; continue; }
+      const n = fbmNoise2D(x * scale, y * scale, 4); // 0..1
+      const delta = (n - 0.5) * 0.35; // +-35% pour un peu plus de contraste
+      // mélange vers noir/blanc selon signe
+      const mixTo = delta >= 0 ? 255 : 0;
+      const t = Math.abs(delta);
+      data[idx+0] = Math.round(base.r + (mixTo - base.r) * t);
+      data[idx+1] = Math.round(base.g + (mixTo - base.g) * t);
+      data[idx+2] = Math.round(base.b + (mixTo - base.b) * t);
+      data[idx+3] = 255;
+    }
+  }
+  octx.putImageData(img, 0, 0);
+  wallTextureCache = { tile, canvas: off };
+  return off;
 }
 
 // --- Génération procédurale type grotte avec alvéoles et couloirs ---
@@ -666,6 +696,46 @@ function hexToRgb(h) {
   const t = s.length === 3 ? s.split('').map(c => c + c).join('') : s;
   const n = parseInt(t, 16);
   return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+}
+
+// Bruit simple déterministe basé sur hash pour nuances de roches
+function noise2D(x, y) {
+  // hash integer -> 0..1
+  const xi = Math.floor(x), yi = Math.floor(y);
+  let n = (xi * 73856093) ^ (yi * 19349663);
+  n = (n << 13) ^ n;
+  const nn = (n * (n * n * 15731 + 789221) + 1376312589) & 0x7fffffff;
+  return (nn / 0x7fffffff);
+}
+
+function lerp(a, b, t) { return a + (b - a) * t; }
+function smoothstep(t) { return t * t * (3 - 2 * t); }
+function valueNoise2D(x, y) {
+  const x0 = Math.floor(x), y0 = Math.floor(y);
+  const x1 = x0 + 1, y1 = y0 + 1;
+  const sx = smoothstep(x - x0);
+  const sy = smoothstep(y - y0);
+  const n00 = noise2D(x0, y0);
+  const n10 = noise2D(x1, y0);
+  const n01 = noise2D(x0, y1);
+  const n11 = noise2D(x1, y1);
+  const ix0 = lerp(n00, n10, sx);
+  const ix1 = lerp(n01, n11, sx);
+  return lerp(ix0, ix1, sy);
+}
+
+function fbmNoise2D(x, y, octaves = 4) {
+  let total = 0;
+  let freq = 1;
+  let amp = 1;
+  let maxAmp = 0;
+  for (let i = 0; i < octaves; i++) {
+    total += valueNoise2D(x * freq, y * freq) * amp;
+    maxAmp += amp;
+    freq *= 2;
+    amp *= 0.5;
+  }
+  return total / maxAmp;
 }
 
 // Lancement
