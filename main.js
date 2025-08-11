@@ -17,6 +17,7 @@ const state = {
   rows: 0,
   tiles: null, // 2D array: true=wall, false=floor
   spawns: [],
+  hqs: [],
 };
 
 const q = (sel, el = document) => el.querySelector(sel);
@@ -77,6 +78,7 @@ function startGame() {
   state.cols = state.mapCols;
   state.rows = state.mapRows;
   state.tiles = generateCaveMap(state.cols, state.rows);
+  state.hqs = computeHQs(state.players);
   renderApp();
 }
 
@@ -276,7 +278,12 @@ function drawScene(canvas) {
   ctx.stroke();
   ctx.globalAlpha = 1;
 
-  // Pas de marqueurs de spawn à l'écran (supprimés comme demandé)
+  // Dessin des QG des joueurs
+  if (state.hqs && state.hqs.length) {
+    for (const hq of state.hqs) {
+      drawHQ(ctx, hq, tile, ox, oy);
+    }
+  }
 
   ctx.restore();
 }
@@ -525,6 +532,140 @@ function floorRatio(grid) {
     }
   }
   return floors / ((rows - 2) * (cols - 2));
+}
+
+// --- Placement et rendu des QG ---
+function computeHQs(numPlayers) {
+  // Utilise les chambres d'angle comme candidats de spawn, sinon coins bruts
+  const cands = (state.spawns && state.spawns.length === 4)
+    ? state.spawns.map(s => ({ x: s.x, y: s.y }))
+    : [
+        { x: 2, y: 2 },
+        { x: state.cols - 3, y: 2 },
+        { x: 2, y: state.rows - 3 },
+        { x: state.cols - 3, y: state.rows - 3 },
+      ];
+  const pick = {
+    2: [0, 3],
+    3: [0, 1, 2],
+    4: [0, 1, 2, 3],
+  }[numPlayers] || [0, 3];
+
+  const result = [];
+  const minSep = Math.floor(Math.min(state.cols, state.rows) / 3);
+  for (let i = 0; i < pick.length; i++) {
+    const target = cands[pick[i]];
+    const near = findOpenCenterNear(target.x, target.y, minSep, result);
+    ensureOpen3x3(near.x, near.y);
+    result.push({ cx: near.x, cy: near.y, colorKey: state.playerColors[i] });
+  }
+  return result;
+}
+
+function findOpenCenterNear(tx, ty, minSeparation, placed) {
+  // Cherche un centre de 3x3 au sol proche du point cible, en respectant une séparation minimale
+  const maxR = Math.floor(Math.max(state.cols, state.rows) / 4);
+  for (let r = 0; r <= maxR; r++) {
+    for (let y = Math.max(1, ty - r); y <= Math.min(state.rows - 2, ty + r); y++) {
+      const xs = [Math.max(1, tx - r), Math.min(state.cols - 2, tx + r)];
+      for (const x of xs) {
+        if (isClear3x3(x, y) && farFromOthers(x, y, placed, minSeparation)) return { x, y };
+      }
+    }
+    for (let x = Math.max(1, tx - r); x <= Math.min(state.cols - 2, tx + r); x++) {
+      const ys = [Math.max(1, ty - r), Math.min(state.rows - 2, ty + r)];
+      for (const y of ys) {
+        if (isClear3x3(x, y) && farFromOthers(x, y, placed, minSeparation)) return { x, y };
+      }
+    }
+  }
+  // défaut: clippe aux bornes et renvoie
+  return { x: Math.min(state.cols - 2, Math.max(1, tx)), y: Math.min(state.rows - 2, Math.max(1, ty)) };
+}
+
+function isClear3x3(cx, cy) {
+  for (let y = cy - 1; y <= cy + 1; y++) {
+    for (let x = cx - 1; x <= cx + 1; x++) {
+      if (y <= 0 || y >= state.rows - 1 || x <= 0 || x >= state.cols - 1) return false;
+      if (state.tiles[y][x]) return false;
+    }
+  }
+  return true;
+}
+
+function ensureOpen3x3(cx, cy) {
+  for (let y = cy - 1; y <= cy + 1; y++) {
+    for (let x = cx - 1; x <= cx + 1; x++) {
+      if (y > 0 && y < state.rows - 1 && x > 0 && x < state.cols - 1) state.tiles[y][x] = false;
+    }
+  }
+}
+
+function farFromOthers(cx, cy, list, minSep) {
+  for (const h of list) {
+    const dx = h.cx - cx; const dy = h.cy - cy;
+    if (Math.hypot(dx, dy) < minSep) return false;
+  }
+  return true;
+}
+
+function drawHQ(ctx, hq, tile, ox, oy) {
+  const cx = ox + (hq.cx + 0.5) * tile;
+  const cy = oy + (hq.cy + 0.5) * tile;
+  const radius = tile * 1.5; // ~3x3 cases
+  const palette = { blue: '#4f8cff', red: '#f55454', purple: '#9b5cff', yellow: '#ffd166' };
+  const base = palette[hq.colorKey] || '#4f8cff';
+
+  ctx.save();
+  // disque externe dégradé
+  const grad = ctx.createRadialGradient(cx, cy, radius * 0.2, cx, cy, radius);
+  grad.addColorStop(0, lighten(base, 0.25));
+  grad.addColorStop(1, shade(base, 0.65));
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+  ctx.fill();
+
+  // anneau interne
+  ctx.lineWidth = Math.max(2, Math.floor(tile * 0.15));
+  ctx.strokeStyle = shade(base, 0.45);
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius * 0.72, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // noyau
+  ctx.fillStyle = shade(base, 0.2);
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius * 0.35, 0, Math.PI * 2);
+  ctx.fill();
+
+  // ombre portée douce vers la droite-bas
+  ctx.save();
+  ctx.globalAlpha = 0.22;
+  ctx.filter = 'blur(4px)';
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  ctx.beginPath();
+  ctx.arc(cx + radius * 0.25, cy + radius * 0.25, radius * 0.9, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  ctx.restore();
+}
+
+function lighten(hex, t) { return mix(hex, '#ffffff', t); }
+function shade(hex, t) { return mix(hex, '#000000', t); }
+function mix(a, b, t) {
+  const ca = hexToRgb(a), cb = hexToRgb(b);
+  const r = Math.round(ca.r + (cb.r - ca.r) * t);
+  const g = Math.round(ca.g + (cb.g - ca.g) * t);
+  const bl = Math.round(ca.b + (cb.b - ca.b) * t);
+  return `rgb(${r}, ${g}, ${bl})`;
+}
+function hexToRgb(h) {
+  const s = h.replace('#','');
+  const t = s.length === 3 ? s.split('').map(c => c + c).join('') : s;
+  const n = parseInt(t, 16);
+  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
 }
 
 // Lancement
