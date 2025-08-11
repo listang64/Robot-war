@@ -64,7 +64,67 @@ canvas#game {
   height: 100%;
 }
 
-/* HUD (sera ajouté plus tard quand on implémentera le jeu) */
+/* HUD in-game */
+.hud { position: absolute; inset: 0; pointer-events: none; }
+
+.turnbar-wrap {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 28px; /* 1 tuile de hauteur environ */
+  background: rgba(255,255,255,0.06);
+  pointer-events: none;
+}
+.turnbar {
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 100%;
+  transition: width 0.12s linear; /* animation fluide */
+  background: var(--barColor, #4f8cff);
+  overflow: hidden;
+}
+.turnbar::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(120deg, rgba(255,255,255,0.6) 0%, rgba(255,255,255,0.12) 40%, rgba(255,255,255,0.6) 100%);
+  background-size: 200% 100%;
+  mix-blend-mode: screen;
+  opacity: 0.55;
+  animation: sweep 1.6s linear infinite;
+  pointer-events: none;
+}
+
+@keyframes sweep {
+  0%   { background-position: 0% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.pause-btn {
+  position: absolute;
+  right: 12px; bottom: 22px;
+  width: 34px; height: 34px;
+  border-radius: 999px;
+  border: 1px solid #2a364e;
+  background: #1b2433;
+  color: var(--text);
+  display: grid; place-items: center;
+  pointer-events: auto;
+}
+.pause-btn .icon { display: grid; grid-auto-flow: column; gap: 4px; }
+.pause-btn .icon span { width: 4px; height: 14px; background: #cfd6e6; border-radius: 2px; }
+.pause-btn.play .icon span:first-child { transform: skewX(-12deg) translateX(2px); width: 0; height: 0; border-left: 12px solid #cfd6e6; border-top: 8px solid transparent; border-bottom: 8px solid transparent; background: transparent; }
+.pause-btn.play .icon span:last-child { display: none; }
+
+.pause-overlay {
+  position: absolute;
+  inset: 0;
+  display: none;
+  place-items: center;
+  background: rgba(0,0,0,0.25);
+  pointer-events: none;
+}
+.pause-overlay .big { display: grid; grid-auto-flow: column; gap: 16px; }
+.pause-overlay .big span { width: 22px; height: 80px; background: rgba(255,255,255,0.85); border-radius: 4px; box-shadow: 0 6px 12px rgba(0,0,0,0.35); }
 
 /* Bottom overlays */
 .bottom-dock {

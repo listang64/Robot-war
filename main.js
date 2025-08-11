@@ -7,12 +7,14 @@ const state = {
   turnMs: 60_000,
   turnStart: 0,
   timerId: null,
+  isPaused: false,
+  turnRatio: 1,
   codeBuffer: "",
   buildingSelection: null, // { type: 'silo' } | null
   // Carte (dimension fixe, on zoome pour la voir entière)
   tileSize: 28, // taille de base (utilisée pour calculs internes)
   mapCols: 96,
-  mapRows: 54,
+  mapRows: 69,
   cols: 0,
   rows: 0,
   tiles: null, // 2D array: true=wall, false=floor
@@ -79,13 +81,35 @@ function startGame() {
   state.rows = state.mapRows;
   state.tiles = generateCaveMap(state.cols, state.rows);
   state.hqs = computeHQs(state.players);
+  state.isPaused = false;
   renderApp();
+  // Démarre le cycle de tour après que la HUD soit montée
+  setTimeout(() => startTurnTimer(), 0);
 }
 
 function renderGame() {
   const wrapper = el('div', { className: 'board' });
   const canvas = el('canvas', { id: 'game' });
   wrapper.append(canvas);
+
+  // HUD: barre de tour + pause
+  const hud = el('div', { className: 'hud' });
+  const barWrap = el('div', { className: 'turnbar-wrap' }, [
+    el('div', { className: 'turnbar', id: 'turnBarBottom' })
+  ]);
+  hud.append(barWrap);
+
+  const pauseBtn = el('button', { className: 'pause-btn', id: 'pauseBtn', title: 'Pause/Play' });
+  pauseBtn.append(iconPause());
+  pauseBtn.addEventListener('click', togglePause);
+  hud.append(pauseBtn);
+
+  const pauseOverlay = el('div', { className: 'pause-overlay', id: 'pauseOverlay' }, [
+    el('div', { className: 'big' }, [el('span'), el('span')])
+  ]);
+  hud.append(pauseOverlay);
+
+  wrapper.append(hud);
 
   // Prépare le canvas et dessine la carte existante (déjà générée au lancement)
   setTimeout(() => {
@@ -142,6 +166,7 @@ function drawPlayerButton() {
   const color = state.playerColors[state.currentPlayerIndex];
   const map = { blue: 'player-blue', red: 'player-red', purple: 'player-purple', yellow: 'player-yellow' };
   const btn = q('#playerBtn');
+  if (!btn) return; // HUD sans bouton joueur dans la vue actuelle
   btn.className = map[color] || 'player-blue';
   btn.textContent = `Joueur ${state.currentPlayerIndex + 1}`;
   btn.onclick = () => toggleEntryPad();
@@ -204,30 +229,81 @@ function selectBuilding(type) {
 // Tour
 function startTurnTimer() {
   state.turnStart = performance.now();
+  state.turnRatio = 1;
   updateTurnBar(1);
   if (state.timerId) cancelAnimationFrame(state.timerId);
   const tick = () => {
-    const elapsed = performance.now() - state.turnStart;
-    const remainRatio = Math.max(0, 1 - (elapsed / state.turnMs));
-    updateTurnBar(remainRatio);
-    if (remainRatio > 0) {
-      state.timerId = requestAnimationFrame(tick);
-    } else {
-      nextPlayer();
+    if (!state.isPaused) {
+      const elapsed = performance.now() - state.turnStart;
+      const remainRatio = Math.max(0, 1 - (elapsed / state.turnMs));
+      state.turnRatio = remainRatio;
+      updateTurnBar(state.turnRatio);
+      if (remainRatio <= 0) { nextPlayer(); return; }
     }
+    state.timerId = requestAnimationFrame(tick);
   };
   state.timerId = requestAnimationFrame(tick);
 }
 
 function updateTurnBar(ratio) {
-  const bar = q('#turnBar');
-  if (bar) bar.style.height = `${Math.round(ratio * 100)}%`;
+  const bar = q('#turnBarBottom');
+  if (!bar) return;
+  bar.style.width = `${Math.max(0, Math.min(100, ratio * 100)).toFixed(3)}%`;
+  const color = getPlayerColor(state.currentPlayerIndex);
+  bar.style.setProperty('--barColor', color);
 }
 
 function nextPlayer() {
+  if (state.timerId) { cancelAnimationFrame(state.timerId); state.timerId = null; }
   state.currentPlayerIndex = (state.currentPlayerIndex + 1) % state.players;
+  state.isPaused = false;
+  state.turnStart = performance.now();
+  state.turnRatio = 1;
+  const bar = q('#turnBarBottom');
+  if (bar) {
+    bar.style.width = '100%';
+    bar.style.setProperty('--barColor', getPlayerColor(state.currentPlayerIndex));
+  }
   drawPlayerButton();
-  startTurnTimer();
+  if (state.timerId) cancelAnimationFrame(state.timerId);
+  const tick = () => {
+    if (!state.isPaused) {
+      const elapsed = performance.now() - state.turnStart;
+      state.turnRatio = Math.max(0, 1 - (elapsed / state.turnMs));
+      updateTurnBar(state.turnRatio);
+      if (state.turnRatio <= 0) { nextPlayer(); return; }
+    }
+    state.timerId = requestAnimationFrame(tick);
+  };
+  state.timerId = requestAnimationFrame(tick);
+}
+
+function getPlayerColor(idx) {
+  const key = state.playerColors[idx];
+  const map = { blue: '#4f8cff', red: '#f55454', purple: '#9b5cff', yellow: '#ffd166' };
+  return map[key] || '#4f8cff';
+}
+
+function togglePause() {
+  state.isPaused = !state.isPaused;
+  const btn = q('#pauseBtn');
+  const overlay = q('#pauseOverlay');
+  if (state.isPaused) {
+    btn.classList.add('play');
+    btn.innerHTML = '';
+    btn.append(iconPlay());
+    overlay.style.display = 'grid';
+  } else {
+    // recalcule turnStart pour conserver la progression actuelle
+    const bar = q('#turnBarBottom');
+    const widthStr = bar && bar.style.width ? parseFloat(bar.style.width) : 100;
+    const remain = Math.max(0, Math.min(100, widthStr)) / 100;
+    state.turnStart = performance.now() - (state.turnMs * (1 - remain));
+    btn.classList.remove('play');
+    btn.innerHTML = '';
+    btn.append(iconPause());
+    overlay.style.display = 'none';
+  }
 }
 
 // Rendu simple sur canvas (placeholder labyrinthe futur)
@@ -243,7 +319,8 @@ function drawScene(canvas) {
   const widthCss = canvas.width / dpr;
   const heightCss = canvas.height / dpr;
   // Choisit une échelle pour afficher TOUTE la carte
-  const tile = Math.floor(Math.min(widthCss / state.cols, heightCss / state.rows));
+  // Réserve 28px en bas pour la barre de tour
+  const tile = Math.floor(Math.min(widthCss / state.cols, (heightCss - 28) / state.rows));
   const ox = Math.floor((widthCss - state.cols * tile) / 2);
   const oy = Math.floor((heightCss - state.rows * tile) / 2);
 
@@ -281,6 +358,9 @@ function drawScene(canvas) {
 
   ctx.restore();
 }
+
+function iconPause() { const d = el('div', { className: 'icon' }, [el('span'), el('span')]); return d; }
+function iconPlay() { const d = el('div', { className: 'icon' }); d.classList.add('play'); d.append(el('span'), el('span')); return d; }
 
 // Cache pour éviter de reconstruire la texture si le tile ne change pas
 let wallTextureCache = { tile: 0, canvas: null };
