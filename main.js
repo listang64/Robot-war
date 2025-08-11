@@ -9,6 +9,14 @@ const state = {
   timerId: null,
   codeBuffer: "",
   buildingSelection: null, // { type: 'silo' } | null
+  // Carte (dimension fixe, on zoome pour la voir entière)
+  tileSize: 28, // taille de base (utilisée pour calculs internes)
+  mapCols: 96,
+  mapRows: 54,
+  cols: 0,
+  rows: 0,
+  tiles: null, // 2D array: true=wall, false=floor
+  spawns: [],
 };
 
 const q = (sel, el = document) => el.querySelector(sel);
@@ -65,6 +73,10 @@ function setPlayers(n) {
 function startGame() {
   state.phase = 'playing';
   state.currentPlayerIndex = 0;
+  // Dimension logique fixe de la carte
+  state.cols = state.mapCols;
+  state.rows = state.mapRows;
+  state.tiles = generateCaveMap(state.cols, state.rows);
   renderApp();
 }
 
@@ -72,12 +84,19 @@ function renderGame() {
   const wrapper = el('div', { className: 'board' });
   const canvas = el('canvas', { id: 'game' });
   wrapper.append(canvas);
-  // Canvas simple pour afficher la carte (placeholder)
+
+  // Prépare le canvas et dessine la carte existante (déjà générée au lancement)
   setTimeout(() => {
     resizeCanvas(canvas);
-    startRenderLoop(canvas);
+    drawScene(canvas);
   });
-  window.addEventListener('resize', () => resizeCanvas(canvas));
+
+  // Sur resize, on NE régénère PAS: on ajuste juste l'échelle pour voir la carte entière
+  window.addEventListener('resize', () => {
+    resizeCanvas(canvas);
+    drawScene(canvas);
+  });
+
   return wrapper;
 }
 
@@ -216,33 +235,296 @@ function resizeCanvas(c) {
   c.height = Math.floor(c.clientHeight * dpr);
 }
 
-function startRenderLoop(canvas) {
+function drawScene(canvas) {
   const ctx = canvas.getContext('2d');
-  const dpr = () => Math.min(2, window.devicePixelRatio || 1);
-  let raf;
-  function loop() {
-    raf = requestAnimationFrame(loop);
-    drawBackground(ctx, canvas, dpr());
-  }
-  raf = requestAnimationFrame(loop);
-}
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const widthCss = canvas.width / dpr;
+  const heightCss = canvas.height / dpr;
+  // Choisit une échelle pour afficher TOUTE la carte
+  const tile = Math.floor(Math.min(widthCss / state.cols, heightCss / state.rows));
+  const ox = Math.floor((widthCss - state.cols * tile) / 2);
+  const oy = Math.floor((heightCss - state.rows * tile) / 2);
 
-function drawBackground(ctx, canvas, dpr) {
   ctx.save();
   ctx.scale(dpr, dpr);
-  // grille douce
-  const w = canvas.width / dpr;
-  const h = canvas.height / dpr;
-  ctx.clearRect(0, 0, w, h);
-  ctx.globalAlpha = 0.12;
+  // Fond sol
+  ctx.fillStyle = '#0d1118';
+  ctx.fillRect(0, 0, widthCss, heightCss);
+
+  // Dessine murs
+  if (state.tiles) {
+    ctx.fillStyle = '#4b3a2c'; // marron foncé
+    for (let y = 0; y < state.rows; y++) {
+      for (let x = 0; x < state.cols; x++) {
+        if (state.tiles[y][x]) {
+          ctx.fillRect(ox + x * tile, oy + y * tile, tile, tile);
+        }
+      }
+    }
+  }
+
+  // Grille discrète
+  ctx.globalAlpha = 0.10;
   ctx.strokeStyle = '#2a3244';
-  const size = 32;
   ctx.beginPath();
-  for (let x = 0; x < w; x += size) { ctx.moveTo(x, 0); ctx.lineTo(x, h); }
-  for (let y = 0; y < h; y += size) { ctx.moveTo(0, y); ctx.lineTo(w, y); }
+  for (let gx = 0; gx <= state.cols; gx++) {
+    const px = ox + gx * tile; ctx.moveTo(px, oy); ctx.lineTo(px, oy + state.rows * tile);
+  }
+  for (let gy = 0; gy <= state.rows; gy++) {
+    const py = oy + gy * tile; ctx.moveTo(ox, py); ctx.lineTo(ox + state.cols * tile, py);
+  }
   ctx.stroke();
   ctx.globalAlpha = 1;
+
+  // Pas de marqueurs de spawn à l'écran (supprimés comme demandé)
+
   ctx.restore();
+}
+
+// --- Génération procédurale type grotte avec alvéoles et couloirs ---
+function generateCaveMap(cols, rows) {
+  // On tente plusieurs générations jusqu'à obtenir un ratio de sol "crédible"
+  const targetMin = 0.40, targetMax = 0.62;
+  let wallChance = 0.50;
+  let last = null;
+  for (let attempt = 0; attempt < 10; attempt++) {
+    let grid = generateOnce(cols, rows, wallChance);
+    const ratio = floorRatio(grid);
+    last = grid;
+    if (ratio >= targetMin && ratio <= targetMax) return grid;
+    // Ajuste la densité et réessaie
+    if (ratio > targetMax) wallChance = Math.min(0.65, wallChance + 0.04); // trop de sol -> plus de murs au départ
+    else wallChance = Math.max(0.35, wallChance - 0.04); // pas assez de sol -> moins de murs
+  }
+  return last;
+}
+
+function generateOnce(cols, rows, wallChance) {
+  // 1) Grille aléatoire initiale (bords toujours murs)
+  let grid = Array.from({ length: rows }, () => Array.from({ length: cols }, () => true));
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < cols; x++) {
+      const border = x === 0 || y === 0 || x === cols - 1 || y === rows - 1;
+      grid[y][x] = border ? true : Math.random() < wallChance;
+    }
+  }
+
+  // 2) Automate cellulaire (cave-like)
+  for (let i = 0; i < 6; i++) grid = stepCellular(grid);
+
+  // 3) Nettoyage: supprime petites poches de sol et petites masses de murs
+  grid = removeSmallRegions(grid, false, 30); // petites cavités -> murs
+  grid = removeSmallRegions(grid, true, 50);  // petites bosses de murs -> sol
+
+  // 4) Alvéoles aux coins (sans tout ouvrir)
+  const chambers = buildCornerChambers(cols, rows);
+  for (const ch of chambers) carveCircle(grid, ch.cx, ch.cy, Math.floor(ch.r * 0.8));
+  state.spawns = chambers.map(c => ({ x: c.cx, y: c.cy }));
+
+  // 5) Connectivité totale par couloirs fins
+  connectAllRegions(grid);
+
+  return grid;
+}
+
+function stepCellular(grid) {
+  const rows = grid.length; const cols = grid[0].length;
+  const out = Array.from({ length: rows }, () => Array.from({ length: cols }, () => true));
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < cols; x++) {
+      const border = x === 0 || y === 0 || x === cols - 1 || y === rows - 1;
+      if (border) { out[y][x] = true; continue; }
+      const wallsAround = countWallNeighbors(grid, x, y);
+      out[y][x] = wallsAround >= 5; // règle douce pour garder les galeries
+    }
+  }
+  return out;
+}
+
+function countWallNeighbors(grid, x, y) {
+  let count = 0;
+  for (let dy = -1; dy <= 1; dy++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      if (dx === 0 && dy === 0) continue;
+      const nx = x + dx, ny = y + dy;
+      if (ny < 0 || ny >= grid.length || nx < 0 || nx >= grid[0].length) { count++; continue; }
+      if (grid[ny][nx]) count++;
+    }
+  }
+  return count;
+}
+
+function buildCornerChambers(cols, rows) {
+  const r = Math.max(6, Math.floor(Math.min(cols, rows) * 0.12));
+  const margin = r + 2;
+  return [
+    { cx: margin, cy: margin, r },
+    { cx: cols - 1 - margin, cy: margin, r },
+    { cx: margin, cy: rows - 1 - margin, r },
+    { cx: cols - 1 - margin, cy: rows - 1 - margin, r },
+  ];
+}
+
+function carveCircle(grid, cx, cy, r) {
+  const rows = grid.length, cols = grid[0].length;
+  for (let y = Math.max(1, cy - r); y <= Math.min(rows - 2, cy + r); y++) {
+    for (let x = Math.max(1, cx - r); x <= Math.min(cols - 2, cx + r); x++) {
+      const dx = x - cx, dy = y - cy;
+      if (dx * dx + dy * dy <= r * r) grid[y][x] = false;
+    }
+  }
+}
+
+function connectAllRegions(grid) {
+  const regions = findFloorRegions(grid);
+  if (regions.length <= 1) return;
+  // Prend la région contenant la 1ère chambre comme principale (ou la plus grande sinon)
+  let mainIndex = 0;
+  if (state.spawns && state.spawns.length) {
+    const seed = state.spawns[0];
+    mainIndex = regions.findIndex(r => r.cells.some(c => c.x === seed.x && c.y === seed.y));
+    if (mainIndex < 0) mainIndex = 0;
+  } else {
+    // plus grande région
+    let max = -1; let idx = 0;
+    regions.forEach((r, i) => { if (r.cells.length > max) { max = r.cells.length; idx = i; } });
+    mainIndex = idx;
+  }
+
+  const connected = new Set([mainIndex]);
+  // Connecte itérativement chaque région non connectée à la région principale via un couloir
+  while (connected.size < regions.length) {
+    let targetIndex = -1;
+    let bestDist = Infinity;
+    let bestPair = null;
+    for (let i = 0; i < regions.length; i++) {
+      if (connected.has(i)) continue;
+      // trouve pair de cellules la plus proche entre cette région et une déjà connectée
+      for (const ci of regions[i].cells) {
+        for (const m of connected) {
+          // centroid de la région principale m
+          const cm = regions[m].centroid;
+          const dx = cm.x - ci.x; const dy = cm.y - ci.y;
+          const d = dx * dx + dy * dy;
+          if (d < bestDist) { bestDist = d; targetIndex = i; bestPair = { from: ci, to: cm }; }
+        }
+      }
+    }
+    if (targetIndex === -1 || !bestPair) break;
+    carveCorridor(grid, bestPair.from, bestPair.to, 1 + (Math.random() < 0.5 ? 1 : 0));
+    // recalcul des régions n'est pas nécessaire si on suppose la connexion faite
+    connected.add(targetIndex);
+  }
+}
+
+function findFloorRegions(grid) {
+  const rows = grid.length, cols = grid[0].length;
+  const visited = Array.from({ length: rows }, () => Array.from({ length: cols }, () => false));
+  const regions = [];
+  const dirs = [ [1,0], [-1,0], [0,1], [0,-1] ];
+
+  for (let y = 1; y < rows - 1; y++) {
+    for (let x = 1; x < cols - 1; x++) {
+      if (!grid[y][x] && !visited[y][x]) {
+        const cells = [];
+        const stack = [{ x, y }];
+        visited[y][x] = true;
+        while (stack.length) {
+          const cur = stack.pop();
+          cells.push(cur);
+          for (const [dx, dy] of dirs) {
+            const nx = cur.x + dx, ny = cur.y + dy;
+            if (nx <= 0 || ny <= 0 || nx >= cols - 1 || ny >= rows - 1) continue;
+            if (!grid[ny][nx] && !visited[ny][nx]) { visited[ny][nx] = true; stack.push({ x: nx, y: ny }); }
+          }
+        }
+        const centroid = {
+          x: Math.round(cells.reduce((a, c) => a + c.x, 0) / cells.length),
+          y: Math.round(cells.reduce((a, c) => a + c.y, 0) / cells.length),
+        };
+        regions.push({ cells, centroid });
+      }
+    }
+  }
+  return regions;
+}
+
+function carveCorridor(grid, from, to, thickness) {
+  const fx = (from && (from.x ?? from.cx)) ?? 1;
+  const fy = (from && (from.y ?? from.cy)) ?? 1;
+  const tx = (to && (to.x ?? to.cx)) ?? (grid[0].length - 2);
+  const ty = (to && (to.y ?? to.cy)) ?? (grid.length - 2);
+  const line = bresenham(fx, fy, tx, ty);
+  for (const p of line) {
+    carveDisk(grid, p.x, p.y, thickness);
+  }
+}
+
+function carveDisk(grid, cx, cy, r) {
+  const rows = grid.length, cols = grid[0].length;
+  for (let y = Math.max(1, cy - r); y <= Math.min(rows - 2, cy + r); y++) {
+    for (let x = Math.max(1, cx - r); x <= Math.min(cols - 2, cx + r); x++) {
+      const dx = x - cx, dy = y - cy;
+      if (dx * dx + dy * dy <= r * r) grid[y][x] = false;
+    }
+  }
+}
+
+function bresenham(x0, y0, x1, y1) {
+  const points = [];
+  let dx = Math.abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
+  let dy = -Math.abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
+  let err = dx + dy;
+  while (true) {
+    points.push({ x: x0, y: y0 });
+    if (x0 === x1 && y0 === y1) break;
+    const e2 = 2 * err;
+    if (e2 >= dy) { err += dy; x0 += sx; }
+    if (e2 <= dx) { err += dx; y0 += sy; }
+  }
+  return points;
+}
+
+// Tunnels aléatoires pour multiplier les galeries
+// Supprime les petites régions (sol ou mur) selon un seuil
+function removeSmallRegions(grid, forWalls, minSize) {
+  const rows = grid.length, cols = grid[0].length;
+  const visited = Array.from({ length: rows }, () => Array.from({ length: cols }, () => false));
+  const dirs = [ [1,0], [-1,0], [0,1], [0,-1] ];
+  for (let y = 1; y < rows - 1; y++) {
+    for (let x = 1; x < cols - 1; x++) {
+      if (visited[y][x]) continue;
+      if (grid[y][x] !== forWalls) continue; // on ne cible que le type demandé
+      const cells = [];
+      const stack = [{ x, y }];
+      visited[y][x] = true;
+      while (stack.length) {
+        const cur = stack.pop();
+        cells.push(cur);
+        for (const [dx, dy] of dirs) {
+          const nx = cur.x + dx, ny = cur.y + dy;
+          if (nx <= 0 || ny <= 0 || nx >= cols - 1 || ny >= rows - 1) continue;
+          if (!visited[ny][nx] && grid[ny][nx] === forWalls) { visited[ny][nx] = true; stack.push({ x: nx, y: ny }); }
+        }
+      }
+      if (cells.length < minSize) {
+        // inverse: petites zones deviennent l'autre type
+        for (const c of cells) grid[c.y][c.x] = !forWalls;
+      }
+    }
+  }
+  return grid;
+}
+
+function floorRatio(grid) {
+  const rows = grid.length, cols = grid[0].length;
+  let floors = 0;
+  for (let y = 1; y < rows - 1; y++) {
+    for (let x = 1; x < cols - 1; x++) {
+      if (!grid[y][x]) floors++;
+    }
+  }
+  return floors / ((rows - 2) * (cols - 2));
 }
 
 // Lancement
