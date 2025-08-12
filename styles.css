@@ -178,7 +178,8 @@ canvas#game {
 }
 .prog-keypad { display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
 .prog-keypad button {
-  height: 36px; font-size: 15px; border-radius: 10px; border: 1px solid #2b3a55; background: #1b2433; color: var(--text); width: 120px;
+  height: 36px; font-size: 18px; border-radius: 10px; border: 1px solid #2b3a55; background: #1b2433; color: var(--text); width: 120px;
+  touch-action: manipulation; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent;
 }
 .prog-keypad button.validate {
   background: linear-gradient(180deg, #2ec27e, #1f9e66);
