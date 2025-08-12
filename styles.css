@@ -126,6 +126,29 @@ canvas#game {
 .pause-overlay .big { display: grid; grid-auto-flow: column; gap: 16px; }
 .pause-overlay .big span { width: 22px; height: 80px; background: rgba(255,255,255,0.85); border-radius: 4px; box-shadow: 0 6px 12px rgba(0,0,0,0.35); }
 
+/* Panel de spawn (droite) */
+.spawn-panel {
+  position: absolute;
+  top: 0; right: 0; bottom: 28px; /* laisser la barre de tour visible */
+  width: min(280px, 70vw);
+  padding: 12px;
+  background: color-mix(in oklab, #101521 85%, transparent);
+  border-left: 1px solid #2a364e;
+  backdrop-filter: blur(8px) saturate(1.1);
+  pointer-events: auto;
+  display: none;
+}
+.spawn-panel.visible { display: block; }
+.spawn-panel h3 { margin: 0 0 10px; font-size: 16px; color: var(--text); }
+.unit-list { display: grid; gap: 10px; }
+.unit-card {
+  display: grid; grid-template-columns: 56px 1fr auto; align-items: center; gap: 10px;
+  padding: 8px; border: 1px solid #2b3a55; border-radius: 12px; background: #161d2a;
+}
+.unit-card canvas { width: 48px; height: 48px; }
+.unit-card .title { font-weight: 700; }
+.unit-card button { height: 34px; padding: 0 12px; border-radius: 8px; border: 1px solid #2b3a55; background: #1b2433; color: var(--text); }
+
 /* Bottom overlays */
 .bottom-dock {
   position: absolute;

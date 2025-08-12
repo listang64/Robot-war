@@ -20,6 +20,7 @@ const state = {
   tiles: null, // 2D array: true=wall, false=floor
   spawns: [],
   hqs: [],
+  units: [], // { id, ownerIndex, x, y, type: 'triangle'|'circle'|'square'|'hexagon'|'star', hp: 1 }
 };
 
 const q = (sel, el = document) => el.querySelector(sel);
@@ -81,10 +82,11 @@ function startGame() {
   state.rows = state.mapRows;
   state.tiles = generateCaveMap(state.cols, state.rows);
   state.hqs = computeHQs(state.players);
+  state.units = [];
   state.isPaused = false;
   renderApp();
   // Démarre le cycle de tour après que la HUD soit montée
-  setTimeout(() => startTurnTimer(), 0);
+  requestAnimationFrame(() => startTurnTimer());
 }
 
 function renderGame() {
@@ -108,6 +110,10 @@ function renderGame() {
     el('div', { className: 'big' }, [el('span'), el('span')])
   ]);
   hud.append(pauseOverlay);
+
+  // Spawn panel (droite)
+  const spawnPanel = renderSpawnPanel();
+  hud.append(spawnPanel);
 
   wrapper.append(hud);
 
@@ -319,8 +325,8 @@ function drawScene(canvas) {
   const widthCss = canvas.width / dpr;
   const heightCss = canvas.height / dpr;
   // Choisit une échelle pour afficher TOUTE la carte
-  // Réserve 28px en bas pour la barre de tour
-  const tile = Math.floor(Math.min(widthCss / state.cols, (heightCss - 28) / state.rows));
+  // Réserve 28px en bas pour la barre de tour et force une taille minimale de tuile
+  const tile = Math.max(2, Math.floor(Math.min(widthCss / state.cols, (heightCss - 28) / state.rows)));
   const ox = Math.floor((widthCss - state.cols * tile) / 2);
   const oy = Math.floor((heightCss - state.rows * tile) / 2);
 
@@ -330,24 +336,35 @@ function drawScene(canvas) {
   ctx.fillStyle = '#0d1118';
   ctx.fillRect(0, 0, widthCss, heightCss);
 
-  // Dessine murs avec texture bruitée fine (avant la grille)
+  // Dessine murs avec nuances par tuile (léger et fiable)
   if (state.tiles) {
-    const tex = getOrCreateWallTexture(tile);
-    if (tex) ctx.drawImage(tex, ox, oy);
+    const baseWall = '#4b3a2c';
+    for (let y = 0; y < state.rows; y++) {
+      for (let x = 0; x < state.cols; x++) {
+        if (!state.tiles[y][x]) continue;
+        const n = fbmNoise2D(x * 0.5, y * 0.5, 3); // 0..1
+        const delta = (n - 0.5) * 0.30; // +-30%
+        const color = delta >= 0 ? lighten(baseWall, Math.abs(delta)) : shade(baseWall, Math.abs(delta));
+        ctx.fillStyle = color;
+        ctx.fillRect(ox + x * tile, oy + y * tile, tile, tile);
+      }
+    }
   }
 
   // Grille discrète (dessinée APRÈS, pour qu'elle recouvre murs et sol)
-  ctx.globalAlpha = 0.10;
-  ctx.strokeStyle = '#2a3244';
-  ctx.beginPath();
-  for (let gx = 0; gx <= state.cols; gx++) {
-    const px = ox + gx * tile; ctx.moveTo(px, oy); ctx.lineTo(px, oy + state.rows * tile);
+  if (tile >= 4) {
+    ctx.globalAlpha = 0.10;
+    ctx.strokeStyle = '#2a3244';
+    ctx.beginPath();
+    for (let gx = 0; gx <= state.cols; gx++) {
+      const px = ox + gx * tile; ctx.moveTo(px, oy); ctx.lineTo(px, oy + state.rows * tile);
+    }
+    for (let gy = 0; gy <= state.rows; gy++) {
+      const py = oy + gy * tile; ctx.moveTo(ox, py); ctx.lineTo(ox + state.cols * tile, py);
+    }
+    ctx.stroke();
+    ctx.globalAlpha = 1;
   }
-  for (let gy = 0; gy <= state.rows; gy++) {
-    const py = oy + gy * tile; ctx.moveTo(ox, py); ctx.lineTo(ox + state.cols * tile, py);
-  }
-  ctx.stroke();
-  ctx.globalAlpha = 1;
 
   // Dessin des QG des joueurs
   if (state.hqs && state.hqs.length) {
@@ -356,47 +373,18 @@ function drawScene(canvas) {
     }
   }
 
+  // Dessin des unités
+  for (const u of state.units) {
+    drawUnit(ctx, u, tile, ox, oy);
+  }
+
   ctx.restore();
 }
 
 function iconPause() { const d = el('div', { className: 'icon' }, [el('span'), el('span')]); return d; }
 function iconPlay() { const d = el('div', { className: 'icon' }); d.classList.add('play'); d.append(el('span'), el('span')); return d; }
 
-// Cache pour éviter de reconstruire la texture si le tile ne change pas
-let wallTextureCache = { tile: 0, canvas: null };
-function getOrCreateWallTexture(tile) {
-  if (wallTextureCache.canvas && wallTextureCache.tile === tile) return wallTextureCache.canvas;
-  const w = state.cols * tile;
-  const h = state.rows * tile;
-  const off = document.createElement('canvas');
-  off.width = w; off.height = h;
-  const octx = off.getContext('2d');
-  const img = octx.createImageData(w, h);
-  const data = img.data;
-  const base = hexToRgb('#4b3a2c');
-  // fréquence du bruit, légèrement augmentée
-  const scale = 0.095; // plus petit -> motifs larges, plus grand -> motifs fins
-  for (let y = 0; y < h; y++) {
-    const ty = Math.floor(y / tile);
-    for (let x = 0; x < w; x++) {
-      const tx = Math.floor(x / tile);
-      const idx = (y * w + x) * 4;
-      if (!state.tiles[ty] || !state.tiles[ty][tx]) { data[idx+3] = 0; continue; }
-      const n = fbmNoise2D(x * scale, y * scale, 4); // 0..1
-      const delta = (n - 0.5) * 0.35; // +-35% pour un peu plus de contraste
-      // mélange vers noir/blanc selon signe
-      const mixTo = delta >= 0 ? 255 : 0;
-      const t = Math.abs(delta);
-      data[idx+0] = Math.round(base.r + (mixTo - base.r) * t);
-      data[idx+1] = Math.round(base.g + (mixTo - base.g) * t);
-      data[idx+2] = Math.round(base.b + (mixTo - base.b) * t);
-      data[idx+3] = 255;
-    }
-  }
-  octx.putImageData(img, 0, 0);
-  wallTextureCache = { tile, canvas: off };
-  return off;
-}
+// (texture murale par pixel supprimée au profit d'un rendu par tuile, plus performant)
 
 // --- Génération procédurale type grotte avec alvéoles et couloirs ---
 function generateCaveMap(cols, rows) {
@@ -427,7 +415,7 @@ function generateOnce(cols, rows, wallChance) {
   }
 
   // 2) Automate cellulaire (cave-like)
-  for (let i = 0; i < 6; i++) grid = stepCellular(grid);
+  for (let i = 0; i < 5; i++) grid = stepCellular(grid);
 
   // 3) Nettoyage: supprime petites poches de sol et petites masses de murs
   grid = removeSmallRegions(grid, false, 30); // petites cavités -> murs
@@ -760,6 +748,339 @@ function drawHQ(ctx, hq, tile, ox, oy) {
   ctx.restore();
 
   ctx.restore();
+}
+
+// --- Panel et logique de spawn ---
+function renderSpawnPanel() {
+  const panel = el('div', { className: 'spawn-panel', id: 'spawnPanel' });
+  panel.append(el('h3', { textContent: 'Unités' }));
+  const list = el('div', { className: 'unit-list' });
+  // Carte: triangle
+  const entries = [
+    { type: 'triangle', label: 'Triangle', drawer: drawTriangleIcon },
+    { type: 'circle', label: 'Rond', drawer: drawCircleIcon },
+    { type: 'square', label: 'Carré', drawer: drawSquareIcon },
+    { type: 'hexagon', label: 'Hexagone', drawer: drawHexagonIcon },
+    { type: 'star', label: 'Étoile', drawer: drawStarIcon },
+  ];
+  for (const ent of entries) {
+    const card = el('div', { className: 'unit-card' });
+    const icon = el('canvas', { width: 48, height: 48 });
+    icon.dataset.type = ent.type;
+    ent.drawer(icon.getContext('2d'), 48, getPlayerColor(state.currentPlayerIndex));
+    const title = el('div', { className: 'title', textContent: ent.label });
+    const btn = button('Créer', () => spawnUnit(ent.type));
+    card.append(icon, title, btn);
+    list.append(card);
+  }
+  panel.append(list);
+  return panel;
+}
+
+function drawTriangleIcon(ctx, size, color) {
+  const c = size / 2;
+  ctx.clearRect(0, 0, size, size);
+  // anneau
+  ctx.beginPath();
+  ctx.strokeStyle = 'rgba(200, 210, 230, 0.45)';
+  ctx.lineWidth = Math.max(2, Math.floor(size * 0.08));
+  ctx.arc(c, c, size * 0.42, 0, Math.PI * 2);
+  ctx.stroke();
+  // triangle
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(c, c - size * 0.22);
+  ctx.lineTo(c - size * 0.22, c + size * 0.18);
+  ctx.lineTo(c + size * 0.22, c + size * 0.18);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function drawCircleIcon(ctx, size, color) {
+  const c = size / 2;
+  ctx.clearRect(0, 0, size, size);
+  ctx.beginPath();
+  ctx.strokeStyle = 'rgba(200, 210, 230, 0.45)';
+  ctx.lineWidth = Math.max(2, Math.floor(size * 0.08));
+  ctx.arc(c, c, size * 0.42, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.fillStyle = color;
+  ctx.arc(c, c, size * 0.24, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawSquareIcon(ctx, size, color) {
+  const c = size / 2;
+  ctx.clearRect(0, 0, size, size);
+  ctx.beginPath();
+  ctx.strokeStyle = 'rgba(200, 210, 230, 0.45)';
+  ctx.lineWidth = Math.max(2, Math.floor(size * 0.08));
+  ctx.arc(c, c, size * 0.42, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.fillStyle = color;
+  const half = size * 0.19;
+  ctx.rect(c - half, c - half, half * 2, half * 2);
+  ctx.fill();
+}
+
+function drawHexagonIcon(ctx, size, color) {
+  const c = size / 2;
+  ctx.clearRect(0, 0, size, size);
+  ctx.beginPath();
+  ctx.strokeStyle = 'rgba(200, 210, 230, 0.45)';
+  ctx.lineWidth = Math.max(2, Math.floor(size * 0.08));
+  ctx.arc(c, c, size * 0.42, 0, Math.PI * 2);
+  ctx.stroke();
+  const r = size * 0.30;
+  ctx.beginPath();
+  ctx.fillStyle = color;
+  for (let i = 0; i < 6; i++) {
+    const a = -Math.PI / 2 + i * (Math.PI / 3);
+    const x = c + Math.cos(a) * r;
+    const y = c + Math.sin(a) * r;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+  ctx.fill();
+}
+
+function drawStarIcon(ctx, size, color) {
+  const c = size / 2;
+  ctx.clearRect(0, 0, size, size);
+  ctx.beginPath();
+  ctx.strokeStyle = 'rgba(200, 210, 230, 0.45)';
+  ctx.lineWidth = Math.max(2, Math.floor(size * 0.08));
+  ctx.arc(c, c, size * 0.42, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.fillStyle = color;
+  const spikes = 5;
+  const outer = size * 0.30;
+  const inner = size * 0.14;
+  for (let i = 0; i < spikes * 2; i++) {
+    const ang = (Math.PI / spikes) * i - Math.PI / 2;
+    const rad = i % 2 === 0 ? outer : inner;
+    const x = c + Math.cos(ang) * rad;
+    const y = c + Math.sin(ang) * rad;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+  ctx.fill();
+}
+
+  // Ouvre/ferme le panel lors du clic sur un QG du joueur actif
+document.addEventListener('click', (e) => {
+  if (state.phase !== 'playing') return;
+  const panel = q('#spawnPanel');
+  const canvas = q('#game');
+  if (!panel || !canvas) return;
+  const rect = canvas.getBoundingClientRect();
+  const x = e.clientX - rect.left; const y = e.clientY - rect.top;
+  // convertit en coordonnées carte
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const widthCss = canvas.width / dpr;
+  const heightCss = canvas.height / dpr;
+  const tile = Math.floor(Math.min(widthCss / state.cols, (heightCss - 28) / state.rows));
+  const ox = Math.floor((widthCss - state.cols * tile) / 2);
+  const oy = Math.floor((heightCss - state.rows * tile) / 2);
+  const gx = Math.floor((x - ox) / tile);
+  const gy = Math.floor((y - oy) / tile);
+  // Vérifie clic sur un QG du joueur actif
+  const activeKey = state.playerColors[state.currentPlayerIndex];
+  const myHq = state.hqs.find(h => h.colorKey === activeKey);
+  if (myHq && Math.abs(gx - myHq.cx) <= 1 && Math.abs(gy - myHq.cy) <= 1) {
+    // toggle panel
+    panel.classList.toggle('visible');
+    // recolor toutes les icônes selon le joueur actif
+    recolorSpawnPanelIcons();
+  } else if (!panel.contains(e.target)) {
+    panel.classList.remove('visible');
+  }
+});
+
+function recolorSpawnPanelIcons() {
+  const panel = q('#spawnPanel'); if (!panel) return;
+  const color = getPlayerColor(state.currentPlayerIndex);
+  const map = {
+    triangle: drawTriangleIcon,
+    circle: drawCircleIcon,
+    square: drawSquareIcon,
+    hexagon: drawHexagonIcon,
+    star: drawStarIcon,
+  };
+  panel.querySelectorAll('canvas').forEach(cv => {
+    const t = cv.dataset.type;
+    const fn = map[t];
+    if (fn) fn(cv.getContext('2d'), cv.width, color);
+  });
+}
+
+function spawnUnit(type) {
+  if (!['triangle','circle','square','hexagon','star'].includes(type)) return;
+  const activeKey = state.playerColors[state.currentPlayerIndex];
+  const hq = state.hqs.find(h => h.colorKey === activeKey);
+  if (!hq) return;
+  // Cherche la case libre la plus proche AUTOUR du 3x3 du QG (infranchissable)
+  let spot = null;
+  for (let r = 2; r <= 5 && !spot; r++) {
+    for (let dy = -r; dy <= r && !spot; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue; // anneau
+        const x = hq.cx + dx;
+        const y = hq.cy + dy;
+        if (!isInBounds(x, y)) continue;
+        if (isBlocked(x, y)) continue;
+        if (unitAt(x, y)) continue;
+        spot = { x, y }; break;
+      }
+    }
+  }
+  if (!spot) return;
+  state.units.push({ id: cryptoRandomId(), ownerIndex: state.currentPlayerIndex, x: spot.x, y: spot.y, type, hp: 1 });
+  const panel = q('#spawnPanel'); if (panel) panel.classList.remove('visible');
+  const canvas = q('#game'); if (canvas) drawScene(canvas);
+}
+
+function isInBounds(x, y) { return x > 0 && y > 0 && x < state.cols - 1 && y < state.rows - 1; }
+function unitAt(x, y) { return state.units.some(u => u.x === x && u.y === y); }
+function cryptoRandomId() { return Math.random().toString(36).slice(2, 10); }
+
+function drawUnit(ctx, u, tile, ox, oy) {
+  const cx = ox + (u.x + 0.5) * tile;
+  const cy = oy + (u.y + 0.5) * tile;
+  const r = tile * 0.46; // cercle intérieur bien centré
+  const color = getPlayerColor(u.ownerIndex);
+  ctx.save();
+  // anneau
+  ctx.lineWidth = Math.max(2, Math.floor(tile * 0.08));
+  ctx.strokeStyle = shade(color, 0.6);
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.stroke();
+  // symbole plein en fonction du type
+  ctx.fillStyle = color;
+  switch (u.type) {
+    case 'triangle':
+      drawTriangleSymbol(ctx, cx, cy, r, u.hp);
+      break;
+    case 'circle':
+      drawCircleSymbol(ctx, cx, cy, r, u.hp);
+      break;
+    case 'square':
+      drawSquareSymbol(ctx, cx, cy, r, u.hp);
+      break;
+    case 'hexagon':
+      drawHexagonSymbol(ctx, cx, cy, r, u.hp);
+      break;
+    case 'star':
+      drawStarSymbol(ctx, cx, cy, r, u.hp);
+      break;
+  }
+  ctx.restore();
+}
+
+// Chaque symbole utilise hp (0..1) pour un remplissage vertical
+function drawTriangleSymbol(ctx, cx, cy, r, hp) {
+  const inner = r * 0.78; // triangle pleinement centré dans l'anneau
+  const angles = [-Math.PI / 2, 5 * Math.PI / 6, Math.PI / 6];
+  const verts = angles.map(a => ({ x: cx + Math.cos(a) * inner, y: cy + Math.sin(a) * inner }));
+  const cutY = cy + inner - (inner * 2 * hp);
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(verts[0].x, verts[0].y);
+  ctx.lineTo(verts[1].x, verts[1].y);
+  ctx.lineTo(verts[2].x, verts[2].y);
+  ctx.closePath();
+  ctx.clip();
+  ctx.beginPath();
+  ctx.rect(cx - inner, cutY, inner * 2, inner * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawCircleSymbol(ctx, cx, cy, r, hp) {
+  ctx.save();
+  ctx.beginPath();
+  const inner = r * 0.62; // plus petit
+  ctx.arc(cx, cy, inner, 0, Math.PI * 2);
+  ctx.clip();
+  const cutY = cy + inner - (inner * 2 * hp);
+  ctx.beginPath();
+  ctx.rect(cx - inner, cutY, inner * 2, inner * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawSquareSymbol(ctx, cx, cy, r, hp) {
+  const half = r * 0.62; // plus petit
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(cx - half, cy - half, half * 2, half * 2);
+  ctx.clip();
+  const cutY = cy + half - (half * 2 * hp);
+  ctx.beginPath();
+  ctx.rect(cx - half, cutY, half * 2, half * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawHexagonSymbol(ctx, cx, cy, r, hp) {
+  const inner = r * 0.80; // bien à l'intérieur de l'anneau
+  ctx.save();
+  ctx.beginPath();
+  for (let i = 0; i < 6; i++) {
+    const a = -Math.PI / 2 + i * (Math.PI / 3);
+    const x = cx + Math.cos(a) * inner;
+    const y = cy + Math.sin(a) * inner;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+  ctx.clip();
+  const cutY = cy + inner - (inner * 2 * hp);
+  ctx.beginPath();
+  ctx.rect(cx - inner, cutY, inner * 2, inner * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawStarSymbol(ctx, cx, cy, r, hp) {
+  const spikes = 5;
+  const outer = r * 0.95;
+  const inner = r * 0.42;
+  ctx.save();
+  ctx.beginPath();
+  for (let i = 0; i < spikes * 2; i++) {
+    const ang = (Math.PI / spikes) * i - Math.PI / 2;
+    const rad = i % 2 === 0 ? outer : inner;
+    const x = cx + Math.cos(ang) * rad;
+    const y = cy + Math.sin(ang) * rad;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+  ctx.clip();
+  const cutY = cy + outer - (outer * 2 * hp);
+  ctx.beginPath();
+  ctx.rect(cx - r, cutY, r * 2, r * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+// Les 9 cases du QG sont infranchissables
+function isHQCell(x, y) {
+  if (!state.hqs) return false;
+  for (const h of state.hqs) {
+    if (Math.abs(x - h.cx) <= 1 && Math.abs(y - h.cy) <= 1) return true;
+  }
+  return false;
+}
+
+function isBlocked(x, y) {
+  if (!isInBounds(x, y)) return true;
+  if (state.tiles && state.tiles[y][x]) return true; // mur
+  if (isHQCell(x, y)) return true; // QG 3x3
+  return false;
 }
 
 function lighten(hex, t) { return mix(hex, '#ffffff', t); }
