@@ -23,6 +23,7 @@ const state = {
   units: [], // { id, ownerIndex, x, y, type: 'triangle'|'circle'|'square'|'hexagon'|'star', hp: 1 }
   programs: {}, // key `${ownerIndex}:${type}` -> number[] commands
   simIntervalId: null,
+  animRafId: null,
 };
 
 const q = (sel, el = document) => el.querySelector(sel);
@@ -454,11 +455,24 @@ function stepSimulation() {
         if (!isInBounds(nx, ny)) continue;
         if (isBlocked(nx, ny)) continue;
         if (unitAt(nx, ny)) continue;
+        // anime le déplacement sur 180ms
+        u.anim = { fromX: u.x, fromY: u.y, toX: nx, toY: ny, startTime: performance.now(), endTime: performance.now() + 180 };
         u.x = nx; u.y = ny; moved = true; break;
       }
     }
   }
-  if (moved) { const canvas = q('#game'); if (canvas) drawScene(canvas); }
+  // lance un rafraîchissement continu pour lisser l'animation
+  if (state.animRafId) cancelAnimationFrame(state.animRafId);
+  const canvas = q('#game');
+  const tick = () => {
+    if (canvas) drawScene(canvas);
+    // continue tant qu'au moins une anim est active
+    const now = performance.now();
+    const active = state.units.some(u => u.anim && u.anim.endTime > now);
+    if (active) state.animRafId = requestAnimationFrame(tick);
+    else state.animRafId = null;
+  };
+  state.animRafId = requestAnimationFrame(tick);
 }
 
 // Rendu simple sur canvas (placeholder labyrinthe futur)
@@ -1097,8 +1111,11 @@ function unitAt(x, y) { return state.units.some(u => u.x === x && u.y === y); }
 function cryptoRandomId() { return Math.random().toString(36).slice(2, 10); }
 
 function drawUnit(ctx, u, tile, ox, oy) {
-  const cx = ox + (u.x + 0.5) * tile;
-  const cy = oy + (u.y + 0.5) * tile;
+  const now = performance.now();
+  const tx = u.anim && u.anim.endTime > now ? u.anim.fromX + (u.anim.toX - u.anim.fromX) * easeOutCubic((now - u.anim.startTime) / (u.anim.endTime - u.anim.startTime)) : u.x;
+  const ty = u.anim && u.anim.endTime > now ? u.anim.fromY + (u.anim.toY - u.anim.fromY) * easeOutCubic((now - u.anim.startTime) / (u.anim.endTime - u.anim.startTime)) : u.y;
+  const cx = ox + (tx + 0.5) * tile;
+  const cy = oy + (ty + 0.5) * tile;
   const r = tile * 0.46; // cercle intérieur bien centré
   const color = getPlayerColor(u.ownerIndex);
   ctx.save();
@@ -1129,6 +1146,8 @@ function drawUnit(ctx, u, tile, ox, oy) {
   }
   ctx.restore();
 }
+
+function easeOutCubic(t) { t = Math.min(1, Math.max(0, t)); return 1 - Math.pow(1 - t, 3); }
 
 // Chaque symbole utilise hp (0..1) pour un remplissage vertical
 function drawTriangleSymbol(ctx, cx, cy, r, hp) {
