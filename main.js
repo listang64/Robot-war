@@ -147,6 +147,31 @@ function renderGame() {
   progOverlay.append(display);
   hud.append(progOverlay);
 
+  // Dev button + overlay
+  const devBtn = el('button', { className: 'dev-btn', id: 'devBtn', title: 'Développeur' });
+  devBtn.textContent = 'D';
+  devBtn.addEventListener('click', toggleDevOverlay);
+  hud.append(devBtn);
+  const devOverlay = el('div', { className: 'dev-overlay', id: 'devOverlay' });
+  const devSide = el('div', { className: 'side-left' });
+  const devList = el('div', { className: 'dev-list' });
+  const colors = [ 'blue', 'red', 'purple', 'yellow' ];
+  for (const col of colors) {
+    const b = el('button');
+    const icon = el('canvas', { width: 40, height: 40 });
+    drawTriangleIcon(icon.getContext('2d'), 40, colorFromKey(col));
+    b.append(icon);
+    b.addEventListener('click', () => selectDevSpawn('triangle', col));
+    devList.append(b);
+  }
+  const closeBtn = el('button', { className: 'dev-close', title: 'Fermer' });
+  closeBtn.textContent = 'X';
+  closeBtn.addEventListener('click', () => { const ov = q('#devOverlay'); if (ov) ov.classList.remove('visible'); devSpawnSelection = null; });
+  devSide.append(devList);
+  devSide.append(closeBtn);
+  devOverlay.append(devSide);
+  hud.append(devOverlay);
+
   wrapper.append(hud);
 
   // Prépare le canvas et dessine la carte existante (déjà générée au lancement)
@@ -331,6 +356,7 @@ function getPlayerColor(idx) {
   const map = { blue: '#4f8cff', red: '#f55454', purple: '#9b5cff', yellow: '#ffd166' };
   return map[key] || '#4f8cff';
 }
+function colorFromKey(key) { const map = { blue: '#4f8cff', red: '#f55454', purple: '#9b5cff', yellow: '#ffd166' }; return map[key] || '#4f8cff'; }
 
 function togglePause() {
   state.isPaused = !state.isPaused;
@@ -430,6 +456,38 @@ function makeFlagButton() {
   b.addEventListener('click', onProgFlag);
   return b;
 }
+
+// --- Dev overlay logic ---
+let devSpawnSelection = null; // { type, colorKey }
+function toggleDevOverlay() {
+  const ov = q('#devOverlay'); if (!ov) return;
+  ov.classList.toggle('visible');
+  devSpawnSelection = null;
+}
+function selectDevSpawn(type, colorKey) {
+  devSpawnSelection = { type, colorKey };
+}
+// Cliquer sur la carte pour placer si sélection active
+document.addEventListener('click', (e) => {
+  if (!devSpawnSelection) return;
+  const canvas = q('#game'); if (!canvas) return;
+  const rect = canvas.getBoundingClientRect();
+  const x = e.clientX - rect.left, y = e.clientY - rect.top;
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const widthCss = canvas.width / dpr, heightCss = canvas.height / dpr;
+  const tile = Math.max(2, Math.floor(Math.min(widthCss / state.cols, (heightCss - 28) / state.rows)));
+  const ox = Math.floor((widthCss - state.cols * tile) / 2);
+  const oy = Math.floor((heightCss - state.rows * tile) / 2);
+  const gx = Math.floor((x - ox) / tile), gy = Math.floor((y - oy) / tile);
+  if (!isInBounds(gx, gy)) return;
+  if (isBlocked(gx, gy)) return;
+  if (unitAt(gx, gy)) return;
+  const ownerIndex = Math.max(0, state.playerColors.indexOf(devSpawnSelection.colorKey));
+  state.units.push({ id: cryptoRandomId(), ownerIndex, x: gx, y: gy, type: devSpawnSelection.type, hp: 1, visitCounts: new Map(), knownWalls: new Set(), knownFree: new Set([`${gx},${gy}`]), recentTrail: [], lastDir: null, anim: null });
+  const canvas2 = q('#game'); if (canvas2) drawScene(canvas2);
+  devSpawnSelection = null;
+  const ov = q('#devOverlay'); if (ov) ov.classList.remove('visible');
+});
 
 function typeFromDigit(d) {
   switch (String(d)) {
@@ -585,7 +643,7 @@ function moveTowardOrExploreInline(u, tx, ty) {
     step = best;
   }
   if (!step) {
-  // 3) fallback: un pas d'exploration (interdit trail récent, demi-tour pénalisé)
+    // 3) fallback: un pas d'exploration biaisé vers l'éloignement des murs connus et la découverte
     const scored = [];
     for (const d of dirs) {
       const nx = u.x + d[0]; const ny = u.y + d[1];
@@ -597,7 +655,9 @@ function moveTowardOrExploreInline(u, tx, ty) {
       const key = `${nx},${ny}`;
     if (u.recentTrail && u.recentTrail.includes(key)) continue;
       const visits = (u.visitCounts && u.visitCounts.get(key)) || 0;
+      // favorise la découverte (cases non connues) et l'éloignement des obstacles récents
       let score = visits + Math.random() * 0.1;
+      if (u.knownFree && u.knownFree.size > 0 && !u.knownFree.has(key)) score -= 0.25;
       if (u.lastDir && d[0] === -u.lastDir[0] && d[1] === -u.lastDir[1]) score += 0.6;
       if (u.lastDir && d[0] === u.lastDir[0] && d[1] === u.lastDir[1]) score -= 0.15;
       scored.push({ d, score });

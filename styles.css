@@ -115,6 +115,44 @@ canvas#game {
 .pause-btn.play .icon span:first-child { transform: skewX(-12deg) translateX(2px); width: 0; height: 0; border-left: 12px solid #cfd6e6; border-top: 8px solid transparent; border-bottom: 8px solid transparent; background: transparent; }
 .pause-btn.play .icon span:last-child { display: none; }
 
+/* Dev button */
+.dev-btn {
+  position: absolute;
+  left: 12px; bottom: 22px;
+  width: 34px; height: 34px;
+  border-radius: 999px;
+  border: 1px solid #2a364e;
+  background: #2a3246;
+  color: #e7ecf3;
+  font-weight: 900;
+  display: grid; place-items: center;
+  pointer-events: auto;
+}
+
+/* Dev overlay (left side) */
+.dev-overlay { position: absolute; inset: 0; display: none; }
+.dev-overlay.visible { display: block; }
+.dev-overlay .side-left {
+  position: absolute; top: 0; left: 0; bottom: 28px; width: fit-content; max-width: 60vw;
+  background: color-mix(in oklab, #101521 85%, transparent);
+  border-right: 1px solid #2a364e;
+  backdrop-filter: blur(8px) saturate(1.1);
+  padding: 10px; pointer-events: auto;
+}
+.dev-list { display: grid; gap: 8px; }
+.dev-list button {
+  height: 48px; min-width: 56px; border-radius: 10px; border: 1px solid #2b3a55; background: #1b2433; color: var(--text);
+  display: grid; place-items: center; padding: 4px 8px;
+}
+.dev-list button canvas { width: 40px; height: 40px; display: block; }
+
+.dev-close {
+  position: absolute; left: 10px; bottom: 10px;
+  width: 28px; height: 28px;
+  border-radius: 8px; border: 1px solid #5a2d2d; background: #6a2b2b; color: #fff;
+  font-weight: 800; display: grid; place-items: center;
+}
+
 .pause-overlay {
   position: absolute;
   inset: 0;
