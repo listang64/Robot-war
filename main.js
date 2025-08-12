@@ -115,6 +115,33 @@ function renderGame() {
   const spawnPanel = renderSpawnPanel();
   hud.append(spawnPanel);
 
+  // Program button (cerveau + engrenage)
+  const progBtn = el('button', { className: 'program-btn', id: 'programBtn', title: 'Programmer (séquences)' });
+  progBtn.style.setProperty('--progColor', getPlayerColor(state.currentPlayerIndex));
+  const progIcon = el('div', { className: 'icon' });
+  // SVG engrenage (style "settings"), mieux reconnaissable
+  progIcon.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="#0b0e14" d="M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.06-.94l2.03-1.58a.5.5 0 0 0 .12-.65l-1.92-3.32a.5.5 0 0 0-.61-.22l-2.39.96c-.5-.38-1.03-.7-1.61-.94l-.37-2.55A.5.5 0 0 0 14.3 2h-4.6a.5.5 0 0 0-.49.42l-.37 2.55c-.58.24-1.11.56-1.61.94l-2.39-.96a.5.5 0 0 0-.61.22L2.3 8.83a.5.5 0 0 0 .12.65l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94L2.42 14.52a.5.5 0 0 0-.12.65l1.92 3.32c.14.24.43.34.69.24l2.39-.96c.5.38 1.03.7 1.61.94l.37 2.55c.05.24.25.42.49.42h4.6c.24 0 .44-.18.49-.42l.37-2.55c.58-.24 1.11-.56 1.61-.94l2.39.96c.26.1.55 0 .69-.24l1.92-3.32a.5.5 0 0 0-.12-.65l-2.03-1.58ZM12 15.5A3.5 3.5 0 1 1 15.5 12 3.5 3.5 0 0 1 12 15.5Z"/></svg>';
+  progBtn.append(progIcon);
+  progBtn.addEventListener('click', toggleProgramOverlay);
+  hud.append(progBtn);
+
+  // Program overlay (droite + display centre)
+  const progOverlay = el('div', { className: 'program-overlay', id: 'programOverlay' });
+  const side = el('div', { className: 'side' });
+  const keypad = el('div', { className: 'prog-keypad' });
+  const keys = ['0','1','2','3','4','5','6','7','8','9'];
+  keys.forEach(k => keypad.append(button(k, () => onProgKey(k))));
+  keypad.append(makeIconButton('⌫', 'Retirer', onProgBackspace));
+  keypad.append(makeFlagButton());
+  keypad.append(makeIconButton('␣', 'Espace', onProgSpace));
+  const validate = button('✔', () => onProgValidate(), 'validate');
+  keypad.append(validate);
+  side.append(keypad);
+  progOverlay.append(side);
+  const display = el('div', { className: 'prog-display', id: 'progDisplay', textContent: '' });
+  progOverlay.append(display);
+  hud.append(progOverlay);
+
   wrapper.append(hud);
 
   // Prépare le canvas et dessine la carte existante (déjà générée au lancement)
@@ -270,6 +297,9 @@ function nextPlayer() {
     bar.style.width = '100%';
     bar.style.setProperty('--barColor', getPlayerColor(state.currentPlayerIndex));
   }
+  // Met à jour la couleur du bouton de programmation
+  const progBtn = q('#programBtn');
+  if (progBtn) progBtn.style.setProperty('--progColor', getPlayerColor(state.currentPlayerIndex));
   drawPlayerButton();
   if (state.timerId) cancelAnimationFrame(state.timerId);
   const tick = () => {
@@ -310,6 +340,62 @@ function togglePause() {
     btn.append(iconPause());
     overlay.style.display = 'none';
   }
+}
+
+// --- Programmation: interactions ---
+let programBuffer = '';
+function toggleProgramOverlay() {
+  const ov = q('#programOverlay');
+  if (!ov) return;
+  ov.classList.toggle('visible');
+  if (ov.classList.contains('visible')) {
+    programBuffer = '';
+    updateProgDisplay();
+  }
+}
+function onProgKey(k) {
+  // Ajoute le chiffre sans espace. Les espaces ne viennent que du bouton "espace".
+  programBuffer = (programBuffer || '') + String(k);
+  updateProgDisplay();
+}
+function onProgBackspace() {
+  // Retire le dernier caractère (chiffre ou espace)
+  if (!programBuffer) return;
+  programBuffer = programBuffer.slice(0, -1);
+  updateProgDisplay();
+}
+function onProgFlag() { /* réservé */ }
+function onProgSpace() {
+  // Insère un séparateur visuel égal à la largeur d’un chiffre (espace insécable fine + espace)
+  if (programBuffer.length === 0 || programBuffer.endsWith(' ')) { updateProgDisplay(); return; }
+  programBuffer += ' ';
+  updateProgDisplay();
+}
+function onProgValidate() { const ov = q('#programOverlay'); if (ov) ov.classList.remove('visible'); }
+function updateProgDisplay() {
+  const d = q('#progDisplay'); if (!d) return;
+  // Remplace chaque espace par un espace visuel matérialisé
+  if (!programBuffer) { d.textContent = ''; return; }
+  let html = '';
+  for (let i = 0; i < programBuffer.length; i++) {
+    const ch = programBuffer[i];
+    if (ch === ' ') html += '<span class="prog-space"></span>';
+    else html += escapeHtml(ch);
+  }
+  d.innerHTML = html;
+}
+
+function escapeHtml(s) { return s.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+
+function makeIconButton(iconText, title, handler) {
+  const b = el('button', { title }); b.textContent = iconText; b.addEventListener('click', handler); return b;
+}
+function makeFlagButton() {
+  const b = el('button', { title: 'Drapeau (marqueur)' });
+  // petit drapeau stylisé via unicode
+  b.textContent = '🚩';
+  b.addEventListener('click', onProgFlag);
+  return b;
 }
 
 // Rendu simple sur canvas (placeholder labyrinthe futur)
