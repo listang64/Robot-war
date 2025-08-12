@@ -450,13 +450,25 @@ function startSimulationLoop() {
 }
 
 function stepSimulation() {
-  if (!state.tiles || !state.units.length) return;
+  if (state.isPaused || !state.tiles || !state.units.length) return;
   let moved = false;
   for (const u of state.units) {
     // ignore les unités déjà en animation
     if (u.anim && performance.now() < u.anim.endTime) continue;
     const cmds = state.programs[programKey(u.ownerIndex, u.type)];
     if (!cmds || cmds.length === 0) continue;
+    // Commande 7 + 18 (QG): aller vers QG (sinon explorer jusqu'à découverte)
+    if (cmds[0] === 7 && cmds[1] === 18) {
+      const myHq = state.hqs.find(h => h.colorKey === state.playerColors[u.ownerIndex]);
+      if (myHq) {
+        // Arrêt lorsqu'on atteint le périmètre autour du 3x3
+        if (isAtHQPerimeter(u.x, u.y, myHq)) continue;
+        const didMove = moveTowardOrExploreInline(u, myHq.cx, myHq.cy);
+        if (didMove) moved = true;
+        continue;
+      }
+      // pas de QG? on tombera sur explorer plus bas si présent
+    }
     // Commande 6: explorer (avec mémoire locale des visites)
     if (cmds.includes(6)) {
       if (!u.visitCounts) u.visitCounts = new Map();
@@ -464,23 +476,36 @@ function stepSimulation() {
       u.visitCounts.set(k, (u.visitCounts.get(k) || 0) + 1);
       const step = (function choose() {
         const dirs = [ [1,0], [-1,0], [0,1], [0,-1] ];
-        const scored = [];
-        for (const d of dirs) {
-          const nx = u.x + d[0];
-          const ny = u.y + d[1];
-          if (!isInBounds(nx, ny)) continue;
-          // cartographie: évite les murs connus
-          if (u.knownWalls && u.knownWalls.has(`${nx},${ny}`)) continue;
-          const blocked = isBlocked(nx, ny);
-          if (blocked) { if (u.knownWalls) u.knownWalls.add(`${nx},${ny}`); continue; }
-          if (unitAt(nx, ny)) continue;
-          const key = `${nx},${ny}`;
-          const visits = (u.visitCounts.get(key) || 0);
-          let score = visits;
-          if (u.lastDir && d[0] === -u.lastDir[0] && d[1] === -u.lastDir[1]) score += 0.6;
-          if (u.lastDir && d[0] === u.lastDir[0] && d[1] === u.lastDir[1]) score -= 0.15;
-          score += Math.random() * 0.1;
-          scored.push({ d, score });
+        const collect = (allowReverse) => {
+          const arr = [];
+          for (const d of dirs) {
+            if (!allowReverse && u.lastDir && d[0] === -u.lastDir[0] && d[1] === -u.lastDir[1]) continue;
+            const nx = u.x + d[0];
+            const ny = u.y + d[1];
+            if (!isInBounds(nx, ny)) continue;
+            if (u.knownWalls && u.knownWalls.has(`${nx},${ny}`)) continue;
+            const blocked = isBlocked(nx, ny);
+            if (blocked) { if (u.knownWalls) u.knownWalls.add(`${nx},${ny}`); continue; }
+            if (unitAt(nx, ny)) continue;
+            const key = `${nx},${ny}`;
+            const visits = (u.visitCounts.get(key) || 0);
+            let score = visits + Math.random() * 0.1;
+            // Interdit strictement de revenir sur une des 6 dernières cases
+            if (u.recentTrail && u.recentTrail.includes(key)) continue;
+            if (u.lastDir && d[0] === u.lastDir[0] && d[1] === u.lastDir[1]) score -= 0.15;
+            arr.push({ d, score });
+          }
+          return arr;
+        };
+        let scored = collect(false);
+        if (scored.length === 0) {
+          // Forcer demi-tour complet si cul-de-sac
+          if (u.lastDir) {
+            const d = [-u.lastDir[0], -u.lastDir[1]];
+            const nx = u.x + d[0], ny = u.y + d[1];
+            if (isInBounds(nx, ny) && !isBlocked(nx, ny) && !unitAt(nx, ny)) return d;
+          }
+          scored = collect(true);
         }
         if (scored.length === 0) return null;
         scored.sort((a, b) => a.score - b.score);
@@ -493,7 +518,9 @@ function stepSimulation() {
         const ny = u.y + step[1];
         const now = performance.now();
         u.anim = { fromX: u.x, fromY: u.y, toX: nx, toY: ny, startTime: now, endTime: now + 200 };
+        updateRecentTrail(u, u.x, u.y);
         u.x = nx; u.y = ny; u.lastDir = step; moved = true;
+        if (u.knownFree) u.knownFree.add(`${u.x},${u.y}`);
       }
     }
   }
@@ -504,11 +531,101 @@ function stepSimulation() {
     if (canvas) drawScene(canvas);
     // continue tant qu'au moins une anim est active
     const now = performance.now();
-    const active = state.units.some(u => u.anim && u.anim.endTime > now);
+    const active = !state.isPaused && state.units.some(u => u.anim && u.anim.endTime > now);
     if (active) state.animRafId = requestAnimationFrame(tick);
     else state.animRafId = null;
   };
   state.animRafId = requestAnimationFrame(tick);
+}
+function updateRecentTrail(u, x, y) {
+  if (!u.recentTrail) u.recentTrail = [];
+  const key = `${x},${y}`;
+  u.recentTrail.push(key);
+  if (u.recentTrail.length > 6) u.recentTrail.shift();
+}
+
+function moveTowardOrExploreInline(u, tx, ty) {
+  if (u.x === tx && u.y === ty) return false;
+  const dirs = [ [1,0], [-1,0], [0,1], [0,-1] ];
+  let best = null; let bestDist = Infinity;
+  const dist0 = Math.abs(tx - u.x) + Math.abs(ty - u.y);
+  // 1) Tente d'abord une amélioration stricte de distance sans revenir sur le trail récent
+  for (const d of dirs) {
+    const nx = u.x + d[0];
+    const ny = u.y + d[1];
+    if (!isInBounds(nx, ny)) continue;
+    if (u.knownWalls && u.knownWalls.has(`${nx},${ny}`)) continue;
+    const blocked = isBlocked(nx, ny);
+    if (blocked) { if (u.knownWalls) u.knownWalls.add(`${nx},${ny}`); continue; }
+    if (unitAt(nx, ny)) continue;
+    const key = `${nx},${ny}`;
+    if (u.recentTrail && u.recentTrail.includes(key)) continue;
+    if (u.knownFree && u.knownFree.size > 0 && !u.knownFree.has(key)) continue;
+    const dist = Math.abs(tx - nx) + Math.abs(ty - ny);
+    if (dist >= dist0) continue; // exige une amélioration stricte
+    if (dist < bestDist) { bestDist = dist; best = d; }
+  }
+  let step = best;
+  if (!step) {
+    // 2) Pas d'amélioration stricte trouvée: autoriser distance égale (plateau), en évitant demi-tour/trail
+    best = null; bestDist = Infinity;
+    for (const d of dirs) {
+      const nx = u.x + d[0]; const ny = u.y + d[1];
+      if (!isInBounds(nx, ny)) continue;
+      if (u.knownWalls && u.knownWalls.has(`${nx},${ny}`)) continue;
+      const blocked = isBlocked(nx, ny);
+      if (blocked) { if (u.knownWalls) u.knownWalls.add(`${nx},${ny}`); continue; }
+      if (unitAt(nx, ny)) continue;
+      if (u.lastDir && d[0] === -u.lastDir[0] && d[1] === -u.lastDir[1]) continue; // évite demi-tour
+      const key = `${nx},${ny}`;
+      if (u.recentTrail && u.recentTrail.includes(key)) continue;
+      const dist = Math.abs(tx - nx) + Math.abs(ty - ny);
+      if (dist === dist0) { best = d; break; }
+    }
+    step = best;
+  }
+  if (!step) {
+  // 3) fallback: un pas d'exploration (interdit trail récent, demi-tour pénalisé)
+    const scored = [];
+    for (const d of dirs) {
+      const nx = u.x + d[0]; const ny = u.y + d[1];
+      if (!isInBounds(nx, ny)) continue;
+      if (u.knownWalls && u.knownWalls.has(`${nx},${ny}`)) continue;
+      const blocked = isBlocked(nx, ny);
+      if (blocked) { if (u.knownWalls) u.knownWalls.add(`${nx},${ny}`); continue; }
+      if (unitAt(nx, ny)) continue;
+      const key = `${nx},${ny}`;
+    if (u.recentTrail && u.recentTrail.includes(key)) continue;
+      const visits = (u.visitCounts && u.visitCounts.get(key)) || 0;
+      let score = visits + Math.random() * 0.1;
+      if (u.lastDir && d[0] === -u.lastDir[0] && d[1] === -u.lastDir[1]) score += 0.6;
+      if (u.lastDir && d[0] === u.lastDir[0] && d[1] === u.lastDir[1]) score -= 0.15;
+      scored.push({ d, score });
+    }
+  if (scored.length === 0) {
+    // 4) ultime recours: ignorer trail mais pas les murs/unités
+    for (const d of dirs) {
+      const nx = u.x + d[0], ny = u.y + d[1];
+      if (!isInBounds(nx, ny)) continue;
+      if (isBlocked(nx, ny)) continue;
+      if (unitAt(nx, ny)) continue;
+      step = d; break;
+    }
+    if (!step) return false;
+  } else {
+    scored.sort((a,b) => a.score - b.score);
+    const bestScore = scored[0].score;
+    const bests = scored.filter(s => Math.abs(s.score - bestScore) < 1e-6);
+    step = bests[Math.floor(Math.random() * bests.length)].d;
+  }
+  }
+  const nx = u.x + step[0];
+  const ny = u.y + step[1];
+  const now = performance.now();
+  u.anim = { fromX: u.x, fromY: u.y, toX: nx, toY: ny, startTime: now, endTime: now + 200 };
+  updateRecentTrail(u, u.x, u.y);
+  u.x = nx; u.y = ny; u.lastDir = step; if (u.knownFree) u.knownFree.add(`${u.x},${u.y}`);
+  return true;
 }
 
 // Rendu simple sur canvas (placeholder labyrinthe futur)
@@ -1137,7 +1254,7 @@ function spawnUnit(type) {
     }
   }
   if (!spot) return;
-  state.units.push({ id: cryptoRandomId(), ownerIndex: state.currentPlayerIndex, x: spot.x, y: spot.y, type, hp: 1, visitCounts: new Map(), knownWalls: new Set(), lastDir: null, anim: null });
+  state.units.push({ id: cryptoRandomId(), ownerIndex: state.currentPlayerIndex, x: spot.x, y: spot.y, type, hp: 1, visitCounts: new Map(), knownWalls: new Set(), knownFree: new Set([`${spot.x},${spot.y}`]), recentTrail: [], lastDir: null, anim: null });
   const panel = q('#spawnPanel'); if (panel) panel.classList.remove('visible');
   const canvas = q('#game'); if (canvas) drawScene(canvas);
 }
@@ -1278,6 +1395,11 @@ function isHQCell(x, y) {
     if (Math.abs(x - h.cx) <= 1 && Math.abs(y - h.cy) <= 1) return true;
   }
   return false;
+}
+
+function isAtHQPerimeter(x, y, hq) {
+  // Arrêt dans un carré ~6x6 (on élargit à Chebyshev <= 3 pour plus de tolérance)
+  return Math.abs(x - hq.cx) <= 3 && Math.abs(y - hq.cy) <= 3;
 }
 
 function isBlocked(x, y) {
