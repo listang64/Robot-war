@@ -297,6 +297,13 @@ function nextPlayer() {
     bar.style.width = '100%';
     bar.style.setProperty('--barColor', getPlayerColor(state.currentPlayerIndex));
   }
+  // Ferme les overlays (programmation et spawn) et réinitialise la saisie
+  const progOverlayEl = q('#programOverlay');
+  if (progOverlayEl) progOverlayEl.classList.remove('visible');
+  const spawnPanelEl = q('#spawnPanel');
+  if (spawnPanelEl) spawnPanelEl.classList.remove('visible');
+  programBuffer = '';
+  updateProgDisplay();
   // Met à jour la couleur du bouton de programmation
   const progBtn = q('#programBtn');
   if (progBtn) progBtn.style.setProperty('--progColor', getPlayerColor(state.currentPlayerIndex));
