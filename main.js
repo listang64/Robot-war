@@ -442,22 +442,47 @@ function stepSimulation() {
   if (!state.tiles || !state.units.length) return;
   let moved = false;
   for (const u of state.units) {
+    // ignore les unités déjà en animation
+    if (u.anim && performance.now() < u.anim.endTime) continue;
     const cmds = state.programs[programKey(u.ownerIndex, u.type)];
     if (!cmds || cmds.length === 0) continue;
-    // Commande 6: explorer
+    // Commande 6: explorer (avec mémoire locale des visites)
     if (cmds.includes(6)) {
-      const dirs = [ [1,0], [-1,0], [0,1], [0,-1] ];
-      // essaie jusqu'à trouver une case franchissable
-      for (let attempt = 0; attempt < 4; attempt++) {
-        const d = dirs[Math.floor(Math.random() * dirs.length)];
-        const nx = u.x + d[0];
-        const ny = u.y + d[1];
-        if (!isInBounds(nx, ny)) continue;
-        if (isBlocked(nx, ny)) continue;
-        if (unitAt(nx, ny)) continue;
-        // anime le déplacement sur 180ms
-        u.anim = { fromX: u.x, fromY: u.y, toX: nx, toY: ny, startTime: performance.now(), endTime: performance.now() + 180 };
-        u.x = nx; u.y = ny; moved = true; break;
+      if (!u.visitCounts) u.visitCounts = new Map();
+      const k = `${u.x},${u.y}`;
+      u.visitCounts.set(k, (u.visitCounts.get(k) || 0) + 1);
+      const step = (function choose() {
+        const dirs = [ [1,0], [-1,0], [0,1], [0,-1] ];
+        const scored = [];
+        for (const d of dirs) {
+          const nx = u.x + d[0];
+          const ny = u.y + d[1];
+          if (!isInBounds(nx, ny)) continue;
+          // cartographie: évite les murs connus
+          if (u.knownWalls && u.knownWalls.has(`${nx},${ny}`)) continue;
+          const blocked = isBlocked(nx, ny);
+          if (blocked) { if (u.knownWalls) u.knownWalls.add(`${nx},${ny}`); continue; }
+          if (unitAt(nx, ny)) continue;
+          const key = `${nx},${ny}`;
+          const visits = (u.visitCounts.get(key) || 0);
+          let score = visits;
+          if (u.lastDir && d[0] === -u.lastDir[0] && d[1] === -u.lastDir[1]) score += 0.6;
+          if (u.lastDir && d[0] === u.lastDir[0] && d[1] === u.lastDir[1]) score -= 0.15;
+          score += Math.random() * 0.1;
+          scored.push({ d, score });
+        }
+        if (scored.length === 0) return null;
+        scored.sort((a, b) => a.score - b.score);
+        const bestScore = scored[0].score;
+        const bests = scored.filter(s => Math.abs(s.score - bestScore) < 1e-6);
+        return bests[Math.floor(Math.random() * bests.length)].d;
+      })();
+      if (step) {
+        const nx = u.x + step[0];
+        const ny = u.y + step[1];
+        const now = performance.now();
+        u.anim = { fromX: u.x, fromY: u.y, toX: nx, toY: ny, startTime: now, endTime: now + 200 };
+        u.x = nx; u.y = ny; u.lastDir = step; moved = true;
       }
     }
   }
@@ -1101,7 +1126,7 @@ function spawnUnit(type) {
     }
   }
   if (!spot) return;
-  state.units.push({ id: cryptoRandomId(), ownerIndex: state.currentPlayerIndex, x: spot.x, y: spot.y, type, hp: 1 });
+  state.units.push({ id: cryptoRandomId(), ownerIndex: state.currentPlayerIndex, x: spot.x, y: spot.y, type, hp: 1, visitCounts: new Map(), knownWalls: new Set(), lastDir: null, anim: null });
   const panel = q('#spawnPanel'); if (panel) panel.classList.remove('visible');
   const canvas = q('#game'); if (canvas) drawScene(canvas);
 }
