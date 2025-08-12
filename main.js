@@ -389,7 +389,18 @@ function onProgValidate() {
   if (tokens.length < 2) { programBuffer = ''; updateProgDisplay(); return; }
   const unitType = typeFromDigit(tokens[0]);
   if (!unitType) { programBuffer = ''; updateProgDisplay(); return; }
-  const commands = tokens.slice(1).map(t => parseInt(t, 10)).filter(n => Number.isFinite(n));
+  const cmdTokens = tokens.slice(1);
+  // Commande spéciale 00: réinitialise le programme du type ciblé pour le joueur actif
+  if (cmdTokens.includes('00')) {
+    delete state.programs[programKey(state.currentPlayerIndex, unitType)];
+    programBuffer = '';
+    updateProgDisplay();
+    return;
+  }
+  const commands = cmdTokens
+    .filter(t => t !== '00')
+    .map(t => parseInt(t, 10))
+    .filter(n => Number.isFinite(n));
   state.programs[programKey(state.currentPlayerIndex, unitType)] = commands;
   programBuffer = '';
   updateProgDisplay();
