@@ -21,6 +21,8 @@ const state = {
   spawns: [],
   hqs: [],
   units: [], // { id, ownerIndex, x, y, type: 'triangle'|'circle'|'square'|'hexagon'|'star', hp: 1 }
+  programs: {}, // key `${ownerIndex}:${type}` -> number[] commands
+  simIntervalId: null,
 };
 
 const q = (sel, el = document) => el.querySelector(sel);
@@ -87,6 +89,8 @@ function startGame() {
   renderApp();
   // Démarre le cycle de tour après que la HUD soit montée
   requestAnimationFrame(() => startTurnTimer());
+  // Démarre la boucle de simulation
+  startSimulationLoop();
 }
 
 function renderGame() {
@@ -378,7 +382,17 @@ function onProgSpace() {
   programBuffer += ' ';
   updateProgDisplay();
 }
-function onProgValidate() { const ov = q('#programOverlay'); if (ov) ov.classList.remove('visible'); }
+function onProgValidate() {
+  const ov = q('#programOverlay'); if (ov) ov.classList.remove('visible');
+  const tokens = (programBuffer || '').trim().split(/\s+/).filter(Boolean);
+  if (tokens.length < 2) { programBuffer = ''; updateProgDisplay(); return; }
+  const unitType = typeFromDigit(tokens[0]);
+  if (!unitType) { programBuffer = ''; updateProgDisplay(); return; }
+  const commands = tokens.slice(1).map(t => parseInt(t, 10)).filter(n => Number.isFinite(n));
+  state.programs[programKey(state.currentPlayerIndex, unitType)] = commands;
+  programBuffer = '';
+  updateProgDisplay();
+}
 function updateProgDisplay() {
   const d = q('#progDisplay'); if (!d) return;
   // Remplace chaque espace par un espace visuel matérialisé
@@ -403,6 +417,48 @@ function makeFlagButton() {
   b.textContent = '🚩';
   b.addEventListener('click', onProgFlag);
   return b;
+}
+
+function typeFromDigit(d) {
+  switch (String(d)) {
+    case '1': return 'triangle';
+    case '2': return 'circle';
+    case '3': return 'square';
+    case '4': return 'hexagon';
+    case '5': return 'star';
+    default: return null;
+  }
+}
+
+function programKey(ownerIndex, type) { return `${ownerIndex}:${type}`; }
+
+function startSimulationLoop() {
+  if (state.simIntervalId) clearInterval(state.simIntervalId);
+  state.simIntervalId = setInterval(stepSimulation, 220);
+}
+
+function stepSimulation() {
+  if (!state.tiles || !state.units.length) return;
+  let moved = false;
+  for (const u of state.units) {
+    const cmds = state.programs[programKey(u.ownerIndex, u.type)];
+    if (!cmds || cmds.length === 0) continue;
+    // Commande 6: explorer
+    if (cmds.includes(6)) {
+      const dirs = [ [1,0], [-1,0], [0,1], [0,-1] ];
+      // essaie jusqu'à trouver une case franchissable
+      for (let attempt = 0; attempt < 4; attempt++) {
+        const d = dirs[Math.floor(Math.random() * dirs.length)];
+        const nx = u.x + d[0];
+        const ny = u.y + d[1];
+        if (!isInBounds(nx, ny)) continue;
+        if (isBlocked(nx, ny)) continue;
+        if (unitAt(nx, ny)) continue;
+        u.x = nx; u.y = ny; moved = true; break;
+      }
+    }
+  }
+  if (moved) { const canvas = q('#game'); if (canvas) drawScene(canvas); }
 }
 
 // Rendu simple sur canvas (placeholder labyrinthe futur)
