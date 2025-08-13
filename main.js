@@ -13,6 +13,7 @@ const state = {
   buildingSelection: null, // { type: 'silo' } | null
   // Carte (dimension fixe, on zoome pour la voir entière)
   tileSize: 28, // taille de base (utilisée pour calculs internes)
+  tileScale: 1.0, // facteur d'agrandissement visuel des cases
   mapCols: 96,
   mapRows: 69,
   cols: 0,
@@ -87,9 +88,11 @@ function setPlayers(n) {
 function startGame() {
   state.phase = 'playing';
   state.currentPlayerIndex = 0;
-  // Dimension logique fixe de la carte
-  state.cols = state.mapCols;
-  state.rows = state.mapRows;
+  // Dimensions logiques de la carte, adaptées à l'écran pour maximiser la taille de case
+  // Taille logique choisie une fois au démarrage (plus raisonnable)
+  const dims = computeDesiredMapDims({ targetTile: 22 });
+  state.cols = dims.cols;
+  state.rows = dims.rows;
   state.tiles = generateCaveMap(state.cols, state.rows);
   state.hqs = computeHQs(state.players);
   state.units = [];
@@ -419,6 +422,7 @@ function toggleProgramOverlay() {
     programBuffer = '';
     updateProgDisplay();
   }
+  const canvas = q('#game'); if (canvas) drawScene(canvas);
 }
 function onProgKey(k) {
   // Ajoute le chiffre sans espace. Les espaces ne viennent que du bouton "espace".
@@ -440,6 +444,7 @@ function onProgSpace() {
 }
 function onProgValidate() {
   const ov = q('#programOverlay'); if (ov) ov.classList.remove('visible');
+  const canvasR = q('#game'); if (canvasR) drawScene(canvasR);
   const tokens = (programBuffer || '').trim().split(/\s+/).filter(Boolean);
   if (tokens.length < 2) { programBuffer = ''; updateProgDisplay(); return; }
   const unitId = tokens[0];
@@ -494,6 +499,7 @@ function toggleDevOverlay() {
   const ov = q('#devOverlay'); if (!ov) return;
   ov.classList.toggle('visible');
   devSpawnSelection = null;
+  const canvas = q('#game'); if (canvas) drawScene(canvas);
 }
 function selectDevSpawn(type, colorKey) {
   devSpawnSelection = { type, colorKey };
@@ -504,11 +510,7 @@ document.addEventListener('click', (e) => {
   const canvas = q('#game'); if (!canvas) return;
   const rect = canvas.getBoundingClientRect();
   const x = e.clientX - rect.left, y = e.clientY - rect.top;
-  const dpr = Math.min(2, window.devicePixelRatio || 1);
-  const widthCss = canvas.width / dpr, heightCss = canvas.height / dpr;
-  const tile = Math.max(2, Math.floor(Math.min(widthCss / state.cols, (heightCss - 28) / state.rows)));
-  const ox = Math.floor((widthCss - state.cols * tile) / 2);
-  const oy = Math.floor((heightCss - state.rows * tile) / 2);
+  const { tile, ox, oy } = computeCanvasMetrics(canvas);
   const gx = Math.floor((x - ox) / tile), gy = Math.floor((y - oy) / tile);
   if (!isInBounds(gx, gy)) return;
   if (isBlocked(gx, gy)) return;
@@ -526,11 +528,7 @@ document.addEventListener('click', (e) => {
   const canvas = q('#game'); if (!canvas) return;
   const rect = canvas.getBoundingClientRect();
   const x = e.clientX - rect.left, y = e.clientY - rect.top;
-  const dpr = Math.min(2, window.devicePixelRatio || 1);
-  const widthCss = canvas.width / dpr, heightCss = canvas.height / dpr;
-  const tile = Math.max(2, Math.floor(Math.min(widthCss / state.cols, (heightCss - 28) / state.rows)));
-  const ox = Math.floor((widthCss - state.cols * tile) / 2);
-  const oy = Math.floor((heightCss - state.rows * tile) / 2);
+  const { tile, ox, oy } = computeCanvasMetrics(canvas);
   const gx = Math.floor((x - ox) / tile), gy = Math.floor((y - oy) / tile);
   const u = state.units.find(u => u.x === gx && u.y === gy && u.ownerIndex === state.currentPlayerIndex);
   if (!u) return;
@@ -757,16 +755,43 @@ function resizeCanvas(c) {
   c.height = Math.floor(c.clientHeight * dpr);
 }
 
-function drawScene(canvas) {
-  const ctx = canvas.getContext('2d');
+function getOverlayReserves() {
+  // Réserves en pixels CSS pour laisser la place aux panneaux visibles
+  // Désactivé: les overlays doivent flotter AU DESSUS sans décaler la carte
+  return { left: 0, right: 0 };
+}
+
+function computeCanvasMetrics(canvas) {
   const dpr = Math.min(2, window.devicePixelRatio || 1);
   const widthCss = canvas.width / dpr;
   const heightCss = canvas.height / dpr;
-  // Choisit une échelle pour afficher TOUTE la carte
-  // Réserve 28px en bas pour la barre de tour et force une taille minimale de tuile
-  const tile = Math.max(2, Math.floor(Math.min(widthCss / state.cols, (heightCss - 28) / state.rows)));
-  const ox = Math.floor((widthCss - state.cols * tile) / 2);
+  const reserves = getOverlayReserves();
+  const widthAvail = widthCss; // ne pas réduire l'espace de la carte pour les overlays
+  const baseTileFit = Math.max(2, Math.floor(Math.min(widthAvail / state.cols, (heightCss - 28) / state.rows)));
+  const desired = Math.max(2, Math.floor(baseTileFit * (state.tileScale || 1)));
+  const tile = Math.min(baseTileFit, desired); // ne dépasse jamais l'espace disponible
+  const ox = Math.floor((widthAvail - state.cols * tile) / 2);
   const oy = Math.floor((heightCss - state.rows * tile) / 2);
+  return { dpr, widthCss, heightCss, tile, ox, oy };
+}
+
+function computeDesiredMapDims(opts = {}) {
+  // Vise une tuile confortable (~34-42px) sans overlays.
+  // Choisit des dimensions logiques multiples de 3, bornées, pour garder la grotte crédible.
+  const vw = Math.max(320, Math.floor(window.innerWidth || 1024));
+  const vh = Math.max(320, Math.floor(window.innerHeight || 768));
+  const targetTile = Math.max(18, Math.min(40, Number(opts.targetTile) || 38));
+  const cols = Math.max(48, Math.min(96, Math.floor(vw / targetTile)));
+  const rows = Math.max(36, Math.min(69, Math.floor((vh - 28) / targetTile)));
+  // ajuste aux bords (>= 3) et pair/impair pas critique, mais on garde >=3
+  const adjCols = Math.max(16, cols - (cols % 1));
+  const adjRows = Math.max(12, rows - (rows % 1));
+  return { cols: adjCols, rows: adjRows };
+}
+
+function drawScene(canvas) {
+  const ctx = canvas.getContext('2d');
+  const { dpr, widthCss, heightCss, tile, ox, oy } = computeCanvasMetrics(canvas);
 
   ctx.save();
   ctx.scale(dpr, dpr);
@@ -1312,12 +1337,7 @@ document.addEventListener('click', (e) => {
   const rect = canvas.getBoundingClientRect();
   const x = e.clientX - rect.left; const y = e.clientY - rect.top;
   // convertit en coordonnées carte
-  const dpr = Math.min(2, window.devicePixelRatio || 1);
-  const widthCss = canvas.width / dpr;
-  const heightCss = canvas.height / dpr;
-  const tile = Math.floor(Math.min(widthCss / state.cols, (heightCss - 28) / state.rows));
-  const ox = Math.floor((widthCss - state.cols * tile) / 2);
-  const oy = Math.floor((heightCss - state.rows * tile) / 2);
+  const { tile, ox, oy } = computeCanvasMetrics(canvas);
   const gx = Math.floor((x - ox) / tile);
   const gy = Math.floor((y - oy) / tile);
   // Vérifie clic sur un QG du joueur actif
@@ -1328,8 +1348,10 @@ document.addEventListener('click', (e) => {
     panel.classList.toggle('visible');
     // recolor toutes les icônes selon le joueur actif
     recolorSpawnPanelIcons();
+    const canvas2 = q('#game'); if (canvas2) drawScene(canvas2);
   } else if (!panel.contains(e.target)) {
     panel.classList.remove('visible');
+    const canvas2 = q('#game'); if (canvas2) drawScene(canvas2);
   }
 });
 
