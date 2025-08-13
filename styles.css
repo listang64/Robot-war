@@ -164,6 +164,41 @@ canvas#game {
 .pause-overlay .big { display: grid; grid-auto-flow: column; gap: 16px; }
 .pause-overlay .big span { width: 22px; height: 80px; background: rgba(255,255,255,0.85); border-radius: 4px; box-shadow: 0 6px 12px rgba(0,0,0,0.35); }
 
+/* Start overlay */
+.start-overlay {
+  position: absolute;
+  inset: 0;
+  display: none;
+  place-items: center;
+  background: rgba(0,0,0,0.25);
+  pointer-events: auto;
+}
+.start-overlay.visible { display: grid; }
+.start-button {
+  height: 56px;
+  padding: 0 18px;
+  border-radius: 12px;
+  border: 1px solid #178a57;
+  background: linear-gradient(180deg, #2ec27e, #1f9e66);
+  color: #0b0e14;
+  font-weight: 800;
+  font-size: 18px;
+  position: relative;
+  box-shadow: 0 8px 18px rgba(14, 29, 58, 0.45), 0 0 22px rgba(79, 140, 255, 0.45);
+}
+.start-button::after {
+  content: "";
+  position: absolute;
+  left: 12%;
+  right: 12%;
+  bottom: -10px;
+  height: 12px;
+  background: radial-gradient(closest-side, rgba(79,140,255,0.85), rgba(79,140,255,0) 70%);
+  filter: blur(6px);
+  opacity: 0.95;
+  pointer-events: none;
+}
+
 /* Panel de spawn (droite) */
 .spawn-panel {
   position: absolute;

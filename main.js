@@ -88,10 +88,22 @@ function startGame() {
   state.tiles = generateCaveMap(state.cols, state.rows);
   state.hqs = computeHQs(state.players);
   state.units = [];
-  state.isPaused = false;
   // init cartographies partagées
   state.playerMaps = Array.from({ length: state.players }, () => ({ knownWalls: new Set(), knownFree: new Set(), visitCounts: new Map() }));
+  // Spawns init: 3 triangles par joueur, à côté du QG
+  for (let i = 0; i < state.players; i++) {
+    const colorKey = state.playerColors[i];
+    const hq = state.hqs.find(h => h.colorKey === colorKey);
+    if (!hq) continue;
+    spawnInitialUnitsAtHQ(hq, i, 3, 'triangle');
+  }
+  // Le jeu démarre en pause
+  state.isPaused = true;
+  // init cartographies partagées
+  
   renderApp();
+  // Affiche le bouton de démarrage
+  requestAnimationFrame(() => { const so = q('#startOverlay'); if (so) so.classList.add('visible'); });
   // Démarre le cycle de tour après que la HUD soit montée
   requestAnimationFrame(() => startTurnTimer());
   // Démarre la boucle de simulation
@@ -111,7 +123,7 @@ function renderGame() {
   hud.append(barWrap);
 
   const pauseBtn = el('button', { className: 'pause-btn', id: 'pauseBtn', title: 'Pause/Play' });
-  pauseBtn.append(iconPause());
+  pauseBtn.append(iconPlay());
   pauseBtn.addEventListener('click', togglePause);
   hud.append(pauseBtn);
 
@@ -119,6 +131,13 @@ function renderGame() {
     el('div', { className: 'big' }, [el('span'), el('span')])
   ]);
   hud.append(pauseOverlay);
+
+  // Start overlay
+  const startOv = el('div', { className: 'start-overlay', id: 'startOverlay' });
+  const startBtn = el('button', { className: 'start-button', textContent: 'Commencer la partie' });
+  startBtn.addEventListener('click', () => { if (state.isPaused) togglePause(); const so = q('#startOverlay'); if (so) so.classList.remove('visible'); });
+  startOv.append(startBtn);
+  hud.append(startOv);
 
   // Spawn panel (droite)
   const spawnPanel = renderSpawnPanel();
@@ -1325,6 +1344,28 @@ function spawnUnit(type) {
   if (pm) pm.knownFree.add(`${spot.x},${spot.y}`);
   const panel = q('#spawnPanel'); if (panel) panel.classList.remove('visible');
   const canvas = q('#game'); if (canvas) drawScene(canvas);
+}
+
+function spawnInitialUnitsAtHQ(hq, ownerIndex, count, type) {
+  const candidates = [];
+  for (let dy = -2; dy <= 2; dy++) {
+    for (let dx = -2; dx <= 2; dx++) {
+      const x = hq.cx + dx, y = hq.cy + dy;
+      if (!isInBounds(x, y)) continue;
+      if (isHQCell(x, y)) continue;
+      if (isBlocked(x, y)) continue;
+      candidates.push({ x, y });
+    }
+  }
+  let i = 0; const pm = state.playerMaps[ownerIndex];
+  while (i < count && candidates.length) {
+    const idx = Math.floor(Math.random() * candidates.length);
+    const spot = candidates.splice(idx, 1)[0];
+    if (unitAt(spot.x, spot.y)) continue;
+    state.units.push({ id: cryptoRandomId(), ownerIndex, x: spot.x, y: spot.y, type, hp: 1, recentTrail: [], lastDir: null, anim: null });
+    if (pm) pm.knownFree.add(`${spot.x},${spot.y}`);
+    i++;
+  }
 }
 
 function isInBounds(x, y) { return x > 0 && y > 0 && x < state.cols - 1 && y < state.rows - 1; }
