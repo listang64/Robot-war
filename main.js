@@ -118,6 +118,29 @@ function startGame() {
   startSimulationLoop();
 }
 
+function regenerateMapKeepPause() {
+  // Conserve l'état de pause et les paramètres joueurs
+  const wasPaused = state.isPaused;
+  const dims = computeDesiredMapDims({ targetTile: 22 });
+  state.cols = dims.cols; state.rows = dims.rows;
+  state.tiles = generateCaveMap(state.cols, state.rows);
+  state.hqs = computeHQs(state.players);
+  // Réinitialise les unités et cartes partagées
+  state.units = [];
+  state.nextUnitId = 1; // repart des IDs 1, 2, 3...
+  state.programs = {}; // nettoie les anciens programmes liés à d'anciens IDs
+  state.playerMaps = Array.from({ length: state.players }, () => ({ knownWalls: new Set(), knownFree: new Set(), visitCounts: new Map() }));
+  for (let i = 0; i < state.players; i++) {
+    const colorKey = state.playerColors[i];
+    const hq = state.hqs.find(h => h.colorKey === colorKey);
+    if (hq) spawnInitialUnitsAtHQ(hq, i, 3);
+  }
+  // Assure pause et overlay visibles
+  state.isPaused = wasPaused || true;
+  const so = q('#startOverlay'); if (so && !so.classList.contains('visible')) so.classList.add('visible');
+  const canvas = q('#game'); if (canvas) { resizeCanvas(canvas); drawScene(canvas); }
+}
+
 function renderGame() {
   const wrapper = el('div', { className: 'board' });
   const canvas = el('canvas', { id: 'game' });
@@ -142,9 +165,14 @@ function renderGame() {
 
   // Start overlay
   const startOv = el('div', { className: 'start-overlay', id: 'startOverlay' });
+  const stack = el('div', { className: 'start-stack' });
   const startBtn = el('button', { className: 'start-button', textContent: 'Commencer la partie' });
   startBtn.addEventListener('click', () => { if (state.isPaused) togglePause(); const so = q('#startOverlay'); if (so) so.classList.remove('visible'); });
-  startOv.append(startBtn);
+  const regenBtn = el('button', { className: 'start-regenerate', id: 'regenBtn', title: 'Nouvelle carte' });
+  regenBtn.innerHTML = '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="#cfd6e6" d="M17.65 6.35A7.95 7.95 0 0 0 12 4a8 8 0 1 0 7.45 11h-2.21A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L14 10h8V2l-4.35 4.35Z"/></svg>';
+  regenBtn.addEventListener('click', () => regenerateMapKeepPause());
+  stack.append(startBtn, regenBtn);
+  startOv.append(stack);
   hud.append(startOv);
 
   // Spawn panel (droite)
