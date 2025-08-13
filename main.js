@@ -1256,6 +1256,22 @@ function drawHQ(ctx, hq, tile, ox, oy) {
   const base = palette[hq.colorKey] || '#4f8cff';
 
   ctx.save();
+  // lueur externe au sol (sous le QG), dégradé radial couleur joueur
+  (function drawOuterGlow() {
+    const rgb = hexToRgb(base);
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    const rOuter = radius * 3.0;
+    const gradGlow = ctx.createRadialGradient(cx, cy, radius * 0.2, cx, cy, rOuter);
+    gradGlow.addColorStop(0, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.18)`);
+    gradGlow.addColorStop(0.6, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.08)`);
+    gradGlow.addColorStop(1, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0)`);
+    ctx.fillStyle = gradGlow;
+    ctx.beginPath();
+    ctx.arc(cx, cy, rOuter, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  })();
   // disque externe dégradé
   const grad = ctx.createRadialGradient(cx, cy, radius * 0.2, cx, cy, radius);
   grad.addColorStop(0, lighten(base, 0.25));
