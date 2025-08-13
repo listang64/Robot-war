@@ -880,6 +880,9 @@ function drawCaveSurface(ctx, tile, ox, oy) {
   ctx.stroke();
   ctx.restore();
 
+  // 2bis) Accents gris: petits traits rapprochés le long de certains bords de murs
+  drawWallEdgeStrokes(ctx, tile, ox, oy);
+
   // 3) Aucun petit trait sur les murs (supprimé sur demande)
 }
 
@@ -920,6 +923,84 @@ function drawFloorEdgesPath(ctx, tile, ox, oy) {
       }
     }
   }
+}
+
+function drawWallEdgeStrokes(ctx, tile, ox, oy) {
+  // Dessine des petits traits gris le long de quelques bords de murs pour donner du relief
+  const R = state.rows, C = state.cols;
+  const strokeColor = 'rgba(180,185,195,0.26)';
+  const lw = Math.max(1, Math.floor(tile * 0.06));
+  const offset = Math.max(6, Math.floor(tile * 0.75)); // encore plus à l'intérieur du mur
+  const segLen = Math.max(2, Math.floor(tile * 0.28));
+  const gap = Math.max(2, Math.floor(tile * 0.14));
+
+  // Clip aux murs pour que les traits restent côté mur
+  const wallsClip = new Path2D();
+  for (let y = 0; y < R; y++) {
+    for (let x = 0; x < C; x++) {
+      if (!state.tiles[y][x]) continue;
+      wallsClip.rect(ox + x * tile - 0.5, oy + y * tile - 0.5, tile + 1, tile + 1);
+    }
+  }
+  ctx.save();
+  ctx.clip(wallsClip);
+  ctx.strokeStyle = strokeColor;
+  ctx.lineWidth = lw;
+  ctx.lineCap = 'round';
+
+  for (let y = 0; y < R; y++) {
+    for (let x = 0; x < C; x++) {
+      if (!state.tiles[y][x]) continue; // mur uniquement
+      const seed = ((x * 73856093) ^ (y * 19349663)) >>> 0;
+      // Sélection aléatoire clairsemée
+      if ((seed % 11) !== 0) continue;
+
+      const px = ox + x * tile;
+      const py = oy + y * tile;
+      // bord gauche (mur avec sol à gauche)
+      if (x - 1 >= 0 && !state.tiles[y][x - 1]) {
+        for (let i = 0; i < 3; i++) {
+          const sy = py + offset + i * (segLen + gap) - (segLen * 0.5);
+          ctx.beginPath();
+          ctx.moveTo(px + offset, sy);
+          ctx.lineTo(px + offset, sy + segLen);
+          ctx.stroke();
+        }
+      }
+      // bord droit
+      if (x + 1 < C && !state.tiles[y][x + 1]) {
+        for (let i = 0; i < 3; i++) {
+          const sy = py + offset + i * (segLen + gap) - (segLen * 0.5);
+          ctx.beginPath();
+          ctx.moveTo(px + tile - offset, sy);
+          ctx.lineTo(px + tile - offset, sy + segLen);
+          ctx.stroke();
+        }
+      }
+      // bord haut
+      if (y - 1 >= 0 && !state.tiles[y - 1][x]) {
+        for (let i = 0; i < 3; i++) {
+          const sx = px + offset + i * (segLen + gap) - (segLen * 0.5);
+          ctx.beginPath();
+          ctx.moveTo(sx, py + offset);
+          ctx.lineTo(sx + segLen, py + offset);
+          ctx.stroke();
+        }
+      }
+      // bord bas
+      if (y + 1 < R && !state.tiles[y + 1][x]) {
+        for (let i = 0; i < 3; i++) {
+          const sx = px + offset + i * (segLen + gap) - (segLen * 0.5);
+          ctx.beginPath();
+          ctx.moveTo(sx, py + tile - offset);
+          ctx.lineTo(sx + segLen, py + tile - offset);
+          ctx.stroke();
+        }
+      }
+    }
+  }
+
+  ctx.restore();
 }
 
 function iconPause() { const d = el('div', { className: 'icon' }, [el('span'), el('span')]); return d; }
