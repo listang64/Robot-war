@@ -20,12 +20,14 @@ const state = {
   tiles: null, // 2D array: true=wall, false=floor
   spawns: [],
   hqs: [],
-  units: [], // { id, ownerIndex, x, y, type: 'triangle'|'circle'|'square'|'hexagon'|'star', hp: 1 }
-  programs: {}, // key `${ownerIndex}:${type}` -> number[] commands
+  units: [], // { id, ownerIndex, x, y, hp, recentTrail, lastDir, anim }
+  programs: {}, // key unitId -> number[] commands
   simIntervalId: null,
   animRafId: null,
   // Cartographie partagée par joueur
   playerMaps: [], // index -> { knownWalls:Set<string>, knownFree:Set<string>, visitCounts:Map<string,number> }
+  nextUnitId: 1,
+  nextLocalIdByPlayer: [],
 };
 
 const q = (sel, el = document) => el.querySelector(sel);
@@ -90,12 +92,12 @@ function startGame() {
   state.units = [];
   // init cartographies partagées
   state.playerMaps = Array.from({ length: state.players }, () => ({ knownWalls: new Set(), knownFree: new Set(), visitCounts: new Map() }));
-  // Spawns init: 3 triangles par joueur, à côté du QG
+  // Spawns init: 3 unités par joueur, à côté du QG
   for (let i = 0; i < state.players; i++) {
     const colorKey = state.playerColors[i];
     const hq = state.hqs.find(h => h.colorKey === colorKey);
     if (!hq) continue;
-    spawnInitialUnitsAtHQ(hq, i, 3, 'triangle');
+    spawnInitialUnitsAtHQ(hq, i, 3);
   }
   // Le jeu démarre en pause
   state.isPaused = true;
@@ -182,9 +184,9 @@ function renderGame() {
   for (const col of colors) {
     const b = el('button');
     const icon = el('canvas', { width: 40, height: 40 });
-    drawTriangleIcon(icon.getContext('2d'), 40, colorFromKey(col));
+    drawUnitIconWithId(icon.getContext('2d'), 40, colorFromKey(col), '?');
     b.append(icon);
-    b.addEventListener('click', () => selectDevSpawn('triangle', col));
+    b.addEventListener('click', () => selectDevSpawn('unit', col));
     devList.append(b);
   }
   const closeBtn = el('button', { className: 'dev-close', title: 'Fermer' });
@@ -361,6 +363,7 @@ function nextPlayer() {
   const progBtn = q('#programBtn');
   if (progBtn) progBtn.style.setProperty('--progColor', getPlayerColor(state.currentPlayerIndex));
   drawPlayerButton();
+  updateSpawnCreateIconColor();
   if (state.timerId) cancelAnimationFrame(state.timerId);
   const tick = () => {
     if (!state.isPaused) {
@@ -436,12 +439,14 @@ function onProgValidate() {
   const ov = q('#programOverlay'); if (ov) ov.classList.remove('visible');
   const tokens = (programBuffer || '').trim().split(/\s+/).filter(Boolean);
   if (tokens.length < 2) { programBuffer = ''; updateProgDisplay(); return; }
-  const unitType = typeFromDigit(tokens[0]);
-  if (!unitType) { programBuffer = ''; updateProgDisplay(); return; }
+  const unitId = tokens[0];
+  // Restreindre la programmation aux unités du joueur actif uniquement
+  const myUnit = state.units.find(u => String(u.id) === unitId && u.ownerIndex === state.currentPlayerIndex);
+  if (!myUnit) { programBuffer = ''; updateProgDisplay(); return; }
   const cmdTokens = tokens.slice(1);
   // Commande spéciale 00: réinitialise le programme du type ciblé pour le joueur actif
   if (cmdTokens.includes('00')) {
-    delete state.programs[programKey(state.currentPlayerIndex, unitType)];
+    delete state.programs[unitId];
     programBuffer = '';
     updateProgDisplay();
     return;
@@ -450,7 +455,7 @@ function onProgValidate() {
     .filter(t => t !== '00')
     .map(t => parseInt(t, 10))
     .filter(n => Number.isFinite(n));
-  state.programs[programKey(state.currentPlayerIndex, unitType)] = commands;
+  state.programs[unitId] = commands;
   programBuffer = '';
   updateProgDisplay();
 }
@@ -506,10 +511,30 @@ document.addEventListener('click', (e) => {
   if (isBlocked(gx, gy)) return;
   if (unitAt(gx, gy)) return;
   const ownerIndex = Math.max(0, state.playerColors.indexOf(devSpawnSelection.colorKey));
-  state.units.push({ id: cryptoRandomId(), ownerIndex, x: gx, y: gy, type: devSpawnSelection.type, hp: 1, visitCounts: new Map(), knownWalls: new Set(), knownFree: new Set([`${gx},${gy}`]), recentTrail: [], lastDir: null, anim: null });
+  const idNum = state.nextUnitId++;
+  state.units.push({ id: idNum, ownerIndex, x: gx, y: gy, hp: 1, recentTrail: [], lastDir: null, anim: null });
   const canvas2 = q('#game'); if (canvas2) drawScene(canvas2);
   devSpawnSelection = null;
   const ov = q('#devOverlay'); if (ov) ov.classList.remove('visible');
+});
+
+// Cliquer une unité de sa couleur pour ouvrir la programmation avec ID prérempli
+document.addEventListener('click', (e) => {
+  const canvas = q('#game'); if (!canvas) return;
+  const rect = canvas.getBoundingClientRect();
+  const x = e.clientX - rect.left, y = e.clientY - rect.top;
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const widthCss = canvas.width / dpr, heightCss = canvas.height / dpr;
+  const tile = Math.max(2, Math.floor(Math.min(widthCss / state.cols, (heightCss - 28) / state.rows)));
+  const ox = Math.floor((widthCss - state.cols * tile) / 2);
+  const oy = Math.floor((heightCss - state.rows * tile) / 2);
+  const gx = Math.floor((x - ox) / tile), gy = Math.floor((y - oy) / tile);
+  const u = state.units.find(u => u.x === gx && u.y === gy && u.ownerIndex === state.currentPlayerIndex);
+  if (!u) return;
+  const ov = q('#programOverlay'); if (!ov) return;
+  if (!ov.classList.contains('visible')) ov.classList.add('visible');
+  programBuffer = String(u.id) + ' ';
+  updateProgDisplay();
 });
 
 function typeFromDigit(d) {
@@ -536,7 +561,7 @@ function stepSimulation() {
   for (const u of state.units) {
     // ignore les unités déjà en animation
     if (u.anim && performance.now() < u.anim.endTime) continue;
-    const cmds = state.programs[programKey(u.ownerIndex, u.type)];
+    const cmds = state.programs[String(u.id)];
     if (!cmds || cmds.length === 0) continue;
     // Commande 7 + 18 (QG): aller vers QG (sinon explorer jusqu'à découverte)
     if (cmds[0] === 7 && cmds[1] === 18) {
@@ -1153,28 +1178,23 @@ function drawHQ(ctx, hq, tile, ox, oy) {
 // --- Panel et logique de spawn ---
 function renderSpawnPanel() {
   const panel = el('div', { className: 'spawn-panel', id: 'spawnPanel' });
-  panel.append(el('h3', { textContent: 'Unités' }));
   const list = el('div', { className: 'unit-list' });
-  // Carte: triangle
-  const entries = [
-    { type: 'triangle', label: 'Triangle', drawer: drawTriangleIcon },
-    { type: 'circle', label: 'Rond', drawer: drawCircleIcon },
-    { type: 'square', label: 'Carré', drawer: drawSquareIcon },
-    { type: 'hexagon', label: 'Hexagone', drawer: drawHexagonIcon },
-    { type: 'star', label: 'Étoile', drawer: drawStarIcon },
-  ];
-  for (const ent of entries) {
-    const card = el('div', { className: 'unit-card' });
-    const icon = el('canvas', { width: 48, height: 48 });
-    icon.dataset.type = ent.type;
-    ent.drawer(icon.getContext('2d'), 48, getPlayerColor(state.currentPlayerIndex));
-    const title = el('div', { className: 'title', textContent: ent.label });
-    const btn = button('Créer', () => spawnUnit(ent.type));
-    card.append(icon, title, btn);
-    list.append(card);
-  }
+  const card = el('div', { className: 'unit-card' });
+  const icon = el('canvas', { width: 48, height: 48, id: 'spawnCreateIcon' });
+  const colorForSpawn = getPlayerColor(state.currentPlayerIndex);
+  drawUnitIconWithId(icon.getContext('2d'), 48, colorForSpawn, '?');
+  const btn = button('Créer', () => spawnUnit());
+  card.append(icon, btn);
+  list.append(card);
   panel.append(list);
   return panel;
+}
+
+function updateSpawnCreateIconColor() {
+  const cv = q('#spawnCreateIcon');
+  if (!cv) return;
+  const ctx = cv.getContext('2d');
+  drawUnitIconWithId(ctx, cv.width, getPlayerColor(state.currentPlayerIndex), '?');
 }
 
 function drawTriangleIcon(ctx, size, color) {
@@ -1317,8 +1337,7 @@ function recolorSpawnPanelIcons() {
   });
 }
 
-function spawnUnit(type) {
-  if (!['triangle','circle','square','hexagon','star'].includes(type)) return;
+function spawnUnit() {
   const activeKey = state.playerColors[state.currentPlayerIndex];
   const hq = state.hqs.find(h => h.colorKey === activeKey);
   if (!hq) return;
@@ -1338,7 +1357,8 @@ function spawnUnit(type) {
     }
   }
   if (!spot) return;
-  state.units.push({ id: cryptoRandomId(), ownerIndex: state.currentPlayerIndex, x: spot.x, y: spot.y, type, hp: 1, recentTrail: [], lastDir: null, anim: null });
+  const idNum = state.nextUnitId++;
+  state.units.push({ id: idNum, ownerIndex: state.currentPlayerIndex, x: spot.x, y: spot.y, hp: 1, recentTrail: [], lastDir: null, anim: null });
   // Marque la case comme connue libre pour ce joueur
   const pm = state.playerMaps[state.currentPlayerIndex];
   if (pm) pm.knownFree.add(`${spot.x},${spot.y}`);
@@ -1346,7 +1366,7 @@ function spawnUnit(type) {
   const canvas = q('#game'); if (canvas) drawScene(canvas);
 }
 
-function spawnInitialUnitsAtHQ(hq, ownerIndex, count, type) {
+function spawnInitialUnitsAtHQ(hq, ownerIndex, count) {
   const candidates = [];
   for (let dy = -2; dy <= 2; dy++) {
     for (let dx = -2; dx <= 2; dx++) {
@@ -1362,7 +1382,8 @@ function spawnInitialUnitsAtHQ(hq, ownerIndex, count, type) {
     const idx = Math.floor(Math.random() * candidates.length);
     const spot = candidates.splice(idx, 1)[0];
     if (unitAt(spot.x, spot.y)) continue;
-    state.units.push({ id: cryptoRandomId(), ownerIndex, x: spot.x, y: spot.y, type, hp: 1, recentTrail: [], lastDir: null, anim: null });
+    const idNum = state.nextUnitId++;
+    state.units.push({ id: idNum, ownerIndex, x: spot.x, y: spot.y, hp: 1, recentTrail: [], lastDir: null, anim: null });
     if (pm) pm.knownFree.add(`${spot.x},${spot.y}`);
     i++;
   }
@@ -1387,26 +1408,28 @@ function drawUnit(ctx, u, tile, ox, oy) {
   ctx.beginPath();
   ctx.arc(cx, cy, r, 0, Math.PI * 2);
   ctx.stroke();
-  // symbole plein en fonction du type
+  // ID centré (ID global unique)
   ctx.fillStyle = color;
-  switch (u.type) {
-    case 'triangle':
-      drawTriangleSymbol(ctx, cx, cy, r, u.hp);
-      break;
-    case 'circle':
-      drawCircleSymbol(ctx, cx, cy, r, u.hp);
-      break;
-    case 'square':
-      drawSquareSymbol(ctx, cx, cy, r, u.hp);
-      break;
-    case 'hexagon':
-      drawHexagonSymbol(ctx, cx, cy, r, u.hp);
-      break;
-    case 'star':
-      drawStarSymbol(ctx, cx, cy, r, u.hp);
-      break;
-  }
+  ctx.font = `${Math.floor(tile * 0.6)}px ui-monospace, monospace`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(String(u.id), cx, cy + 1);
   ctx.restore();
+}
+
+function drawUnitIconWithId(ctx, size, color, idText) {
+  const c = size / 2;
+  ctx.clearRect(0, 0, size, size);
+  // anneau
+  ctx.beginPath();
+  ctx.strokeStyle = 'rgba(200, 210, 230, 0.45)';
+  ctx.lineWidth = Math.max(2, Math.floor(size * 0.08));
+  ctx.arc(c, c, size * 0.42, 0, Math.PI * 2);
+  ctx.stroke();
+  // id
+  ctx.fillStyle = color;
+  ctx.font = `${Math.floor(size * 0.6)}px ui-monospace, monospace`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(String(idText), c, c + 1);
 }
 
 function easeOutCubic(t) { t = Math.min(1, Math.max(0, t)); return 1 - Math.pow(1 - t, 3); }
