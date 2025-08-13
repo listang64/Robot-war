@@ -31,7 +31,7 @@ const state = {
   nextUnitId: 1,
   nextLocalIdByPlayer: [],
   lastSimTime: 0,
-  unitSpeedTilesPerSec: 6.0,
+  unitSpeedTilesPerSec: 4.5,
 };
 
 const q = (sel, el = document) => el.querySelector(sel);
@@ -620,7 +620,7 @@ function stepSimulation(dt = 0) {
       const k = `${u.x},${u.y}`;
       pm.visitCounts.set(k, (pm.visitCounts.get(k) || 0) + 1);
       const step = (function choose() {
-        const dirs = [ [1,0], [-1,0], [0,1], [0,-1] ];
+        const dirs = [ [1,0], [-1,0], [0,1], [0,-1], [1,1], [1,-1], [-1,1], [-1,-1] ];
         const collect = (allowReverse) => {
           const arr = [];
           for (const d of dirs) {
@@ -688,7 +688,7 @@ function updateRecentTrail(u, x, y) {
 
 function moveTowardOrExploreInline(u, tx, ty) {
   if (u.x === tx && u.y === ty) return false;
-  const dirs = [ [1,0], [-1,0], [0,1], [0,-1] ];
+  const dirs = [ [1,0], [-1,0], [0,1], [0,-1], [1,1], [1,-1], [-1,1], [-1,-1] ];
   let best = null; let bestDist = Infinity;
   const dist0 = Math.abs(tx - u.x) + Math.abs(ty - u.y);
   // 1) Tente d'abord une amélioration stricte de distance sans revenir sur le trail récent
@@ -703,7 +703,8 @@ function moveTowardOrExploreInline(u, tx, ty) {
     const key = `${nx},${ny}`;
     if (u.recentTrail && u.recentTrail.includes(key)) continue;
     if (u.knownFree && u.knownFree.size > 0 && !u.knownFree.has(key)) continue;
-    const dist = Math.abs(tx - nx) + Math.abs(ty - ny);
+    const stepCost = (Math.abs(d[0]) + Math.abs(d[1]) === 2) ? 1.4142 : 1;
+    const dist = Math.abs(tx - nx) + Math.abs(ty - ny) + 0.01 * stepCost;
     if (dist >= dist0) continue; // exige une amélioration stricte
     if (dist < bestDist) { bestDist = dist; best = d; }
   }
@@ -721,7 +722,8 @@ function moveTowardOrExploreInline(u, tx, ty) {
       if (u.lastDir && d[0] === -u.lastDir[0] && d[1] === -u.lastDir[1]) continue; // évite demi-tour
       const key = `${nx},${ny}`;
       if (u.recentTrail && u.recentTrail.includes(key)) continue;
-      const dist = Math.abs(tx - nx) + Math.abs(ty - ny);
+      const stepCost2 = (Math.abs(d[0]) + Math.abs(d[1]) === 2) ? 1.4142 : 1;
+      const dist = Math.abs(tx - nx) + Math.abs(ty - ny) + 0.005 * stepCost2;
       if (dist === dist0) { best = d; break; }
     }
     step = best;
@@ -1148,7 +1150,7 @@ function findFloorRegions(grid) {
   const rows = grid.length, cols = grid[0].length;
   const visited = Array.from({ length: rows }, () => Array.from({ length: cols }, () => false));
   const regions = [];
-  const dirs = [ [1,0], [-1,0], [0,1], [0,-1] ];
+  const dirs = [ [1,0], [-1,0], [0,1], [0,-1], [1,1], [1,-1], [-1,1], [-1,-1] ];
 
   for (let y = 1; y < rows - 1; y++) {
     for (let x = 1; x < cols - 1; x++) {
@@ -1217,7 +1219,7 @@ function bresenham(x0, y0, x1, y1) {
 function removeSmallRegions(grid, forWalls, minSize) {
   const rows = grid.length, cols = grid[0].length;
   const visited = Array.from({ length: rows }, () => Array.from({ length: cols }, () => false));
-  const dirs = [ [1,0], [-1,0], [0,1], [0,-1] ];
+  const dirs = [ [1,0], [-1,0], [0,1], [0,-1], [1,1], [1,-1], [-1,1], [-1,-1] ];
   for (let y = 1; y < rows - 1; y++) {
     for (let x = 1; x < cols - 1; x++) {
       if (visited[y][x]) continue;
