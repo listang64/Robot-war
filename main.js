@@ -795,39 +795,13 @@ function drawScene(canvas) {
 
   ctx.save();
   ctx.scale(dpr, dpr);
-  // Fond sol
-  ctx.fillStyle = '#0d1118';
-  ctx.fillRect(0, 0, widthCss, heightCss);
+  // Fond sol stylisé (dégradé doux + vignette légère)
+  drawStylizedFloor(ctx, widthCss, heightCss);
 
-  // Dessine murs avec nuances par tuile (léger et fiable)
-  if (state.tiles) {
-    const baseWall = '#4b3a2c';
-    for (let y = 0; y < state.rows; y++) {
-      for (let x = 0; x < state.cols; x++) {
-        if (!state.tiles[y][x]) continue;
-        const n = fbmNoise2D(x * 0.5, y * 0.5, 3); // 0..1
-        const delta = (n - 0.5) * 0.30; // +-30%
-        const color = delta >= 0 ? lighten(baseWall, Math.abs(delta)) : shade(baseWall, Math.abs(delta));
-        ctx.fillStyle = color;
-        ctx.fillRect(ox + x * tile, oy + y * tile, tile, tile);
-      }
-    }
-  }
-
-  // Grille discrète (dessinée APRÈS, pour qu'elle recouvre murs et sol)
-  if (tile >= 4) {
-    ctx.globalAlpha = 0.10;
-    ctx.strokeStyle = '#2a3244';
-    ctx.beginPath();
-    for (let gx = 0; gx <= state.cols; gx++) {
-      const px = ox + gx * tile; ctx.moveTo(px, oy); ctx.lineTo(px, oy + state.rows * tile);
-    }
-    for (let gy = 0; gy <= state.rows; gy++) {
-      const py = oy + gy * tile; ctx.moveTo(ox, py); ctx.lineTo(ox + state.cols * tile, py);
-    }
-    ctx.stroke();
-    ctx.globalAlpha = 1;
-  }
+  // Style de carte façon maquette (mêmes codes visuels que l'image):
+  // - Fond sombre
+  // - Zones jouables (sol) plus claires, bords arrondis, outline sombre
+  if (state.tiles) drawCaveSurface(ctx, tile, ox, oy);
 
   // Dessin des QG des joueurs
   if (state.hqs && state.hqs.length) {
@@ -842,6 +816,82 @@ function drawScene(canvas) {
   }
 
   ctx.restore();
+}
+
+function drawStylizedFloor(ctx, widthCss, heightCss) {
+  // Fond = couleur des murs
+  ctx.fillStyle = '#1c1c1c';
+  ctx.fillRect(0, 0, widthCss, heightCss);
+}
+
+function drawCaveSurface(ctx, tile, ox, oy) {
+  const w = state.cols * tile;
+  const h = state.rows * tile;
+  // Couleurs
+  const floorBase = '#36353a';
+  const wallBase = '#1c1c1c';
+
+  // 1) Remplissage des zones SOL (couleur pleine, rectangles qui se chevauchent légèrement pour éviter toute grille)
+  for (let y = 0; y < state.rows; y++) {
+    for (let x = 0; x < state.cols; x++) {
+      if (state.tiles[y][x]) continue; // sol uniquement
+      ctx.fillStyle = floorBase;
+      const px = ox + x * tile - 0.5;
+      const py = oy + y * tile - 0.5;
+      ctx.fillRect(px, py, tile + 1, tile + 1);
+    }
+  }
+
+  // 2) Expansion du bord du SOL (arrondis nets, sans contour visible)
+  ctx.save();
+  ctx.strokeStyle = floorBase;
+  ctx.lineWidth = Math.max(2, Math.floor(tile * 0.90)); // arrondi large
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  drawFloorEdgesPath(ctx, tile, ox, oy);
+  ctx.stroke();
+  ctx.restore();
+
+  // 3) Aucun petit trait sur les murs (supprimé sur demande)
+}
+
+function drawFloorEdgesPath(ctx, tile, ox, oy) {
+  const R = state.rows, C = state.cols;
+  // Pour chaque arête sol/mur, on trace un segment. Les arrondis viennent de lineJoin + blur précédent.
+  ctx.beginPath();
+  for (let y = 0; y < R; y++) {
+    for (let x = 0; x < C; x++) {
+      if (state.tiles[y][x]) continue; // sol
+      // voisin haut = mur -> segment horizontal haut
+      if (y - 1 >= 0 && state.tiles[y - 1][x]) {
+        const x0 = ox + x * tile;
+        const y0 = oy + y * tile;
+        ctx.moveTo(x0, y0);
+        ctx.lineTo(x0 + tile, y0);
+      }
+      // bas
+      if (y + 1 < R && state.tiles[y + 1][x]) {
+        const x0 = ox + x * tile;
+        const y0 = oy + (y + 1) * tile;
+        ctx.moveTo(x0, y0);
+        ctx.lineTo(x0 + tile, y0);
+      }
+      // gauche
+      if (x - 1 >= 0 && state.tiles[y][x - 1]) {
+        const x0 = ox + x * tile;
+        const y0 = oy + y * tile;
+        ctx.moveTo(x0, y0);
+        ctx.lineTo(x0, y0 + tile);
+      }
+      // droite
+      if (x + 1 < C && state.tiles[y][x + 1]) {
+        const x0 = ox + (x + 1) * tile;
+        const y0 = oy + y * tile;
+        ctx.moveTo(x0, y0);
+        ctx.lineTo(x0, y0 + tile);
+      }
+    }
+  }
 }
 
 function iconPause() { const d = el('div', { className: 'icon' }, [el('span'), el('span')]); return d; }
