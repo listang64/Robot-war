@@ -24,10 +24,13 @@ const state = {
   programs: {}, // key unitId -> number[] commands
   simIntervalId: null,
   animRafId: null,
+  simRafId: null,
   // Cartographie partagée par joueur
   playerMaps: [], // index -> { knownWalls:Set<string>, knownFree:Set<string>, visitCounts:Map<string,number> }
   nextUnitId: 1,
   nextLocalIdByPlayer: [],
+  lastSimTime: 0,
+  unitSpeedTilesPerSec: 6.0,
 };
 
 const q = (sel, el = document) => el.querySelector(sel);
@@ -552,10 +555,19 @@ function programKey(ownerIndex, type) { return `${ownerIndex}:${type}`; }
 
 function startSimulationLoop() {
   if (state.simIntervalId) clearInterval(state.simIntervalId);
-  state.simIntervalId = setInterval(stepSimulation, 220);
+  if (state.simRafId) cancelAnimationFrame(state.simRafId);
+  const loop = (t) => {
+    if (!state.lastSimTime) state.lastSimTime = t || performance.now();
+    const now = t || performance.now();
+    const dt = Math.min(0.05, Math.max(0, (now - state.lastSimTime) / 1000));
+    state.lastSimTime = now;
+    if (!state.isPaused) stepSimulation(dt);
+    state.simRafId = requestAnimationFrame(loop);
+  };
+  state.simRafId = requestAnimationFrame(loop);
 }
 
-function stepSimulation() {
+function stepSimulation(dt = 0) {
   if (state.isPaused || !state.tiles || !state.units.length) return;
   let moved = false;
   for (const u of state.units) {
@@ -624,25 +636,22 @@ function stepSimulation() {
         const nx = u.x + step[0];
         const ny = u.y + step[1];
         const now = performance.now();
-        u.anim = { fromX: u.x, fromY: u.y, toX: nx, toY: ny, startTime: now, endTime: now + 200 };
+        // calcule une durée basée sur la vitesse pour glisser entre les cases
+        const tileDuration = Math.max(120, Math.floor(1000 / state.unitSpeedTilesPerSec));
+        u.anim = { fromX: u.x, fromY: u.y, toX: nx, toY: ny, startTime: now, endTime: now + tileDuration };
+        // heading vers la nouvelle direction
+        const ang = Math.atan2(ny - u.y, nx - u.x);
+        u.headingFrom = (u.headingTo ?? ang);
+        u.headingTo = ang;
+        u.headingStart = now; u.headingEnd = now + tileDuration;
         updateRecentTrail(u, u.x, u.y);
         u.x = nx; u.y = ny; u.lastDir = step; moved = true;
           if (pm.knownFree) pm.knownFree.add(`${u.x},${u.y}`);
       }
     }
   }
-  // lance un rafraîchissement continu pour lisser l'animation
-  if (state.animRafId) cancelAnimationFrame(state.animRafId);
-  const canvas = q('#game');
-  const tick = () => {
-    if (canvas) drawScene(canvas);
-    // continue tant qu'au moins une anim est active
-    const now = performance.now();
-    const active = !state.isPaused && state.units.some(u => u.anim && u.anim.endTime > now);
-    if (active) state.animRafId = requestAnimationFrame(tick);
-    else state.animRafId = null;
-  };
-  state.animRafId = requestAnimationFrame(tick);
+  // rendu continu déjà assuré par RAF principal via drawScene dans render loop; on déclenche ici un rendu direct
+  const canvas = q('#game'); if (canvas) drawScene(canvas);
 }
 function updateRecentTrail(u, x, y) {
   if (!u.recentTrail) u.recentTrail = [];
@@ -731,7 +740,11 @@ function moveTowardOrExploreInline(u, tx, ty) {
   const nx = u.x + step[0];
   const ny = u.y + step[1];
   const now = performance.now();
-  u.anim = { fromX: u.x, fromY: u.y, toX: nx, toY: ny, startTime: now, endTime: now + 200 };
+  u.anim = { fromX: u.x, fromY: u.y, toX: nx, toY: ny, startTime: now, endTime: now + 240 };
+  const ang = Math.atan2(ny - u.y, nx - u.x);
+  u.headingFrom = (u.headingTo ?? ang);
+  u.headingTo = ang;
+  u.headingStart = now; u.headingEnd = now + 240;
   updateRecentTrail(u, u.x, u.y);
   u.x = nx; u.y = ny; u.lastDir = step; if (u.knownFree) u.knownFree.add(`${u.x},${u.y}`);
   return true;
@@ -1358,7 +1371,7 @@ function spawnUnit() {
   }
   if (!spot) return;
   const idNum = state.nextUnitId++;
-  state.units.push({ id: idNum, ownerIndex: state.currentPlayerIndex, x: spot.x, y: spot.y, hp: 1, recentTrail: [], lastDir: null, anim: null });
+  state.units.push({ id: idNum, ownerIndex: state.currentPlayerIndex, x: spot.x, y: spot.y, hp: 1, recentTrail: [], lastDir: null, anim: null, headingFrom: 0, headingTo: 0, headingStart: 0, headingEnd: 0 });
   // Marque la case comme connue libre pour ce joueur
   const pm = state.playerMaps[state.currentPlayerIndex];
   if (pm) pm.knownFree.add(`${spot.x},${spot.y}`);
@@ -1383,7 +1396,7 @@ function spawnInitialUnitsAtHQ(hq, ownerIndex, count) {
     const spot = candidates.splice(idx, 1)[0];
     if (unitAt(spot.x, spot.y)) continue;
     const idNum = state.nextUnitId++;
-    state.units.push({ id: idNum, ownerIndex, x: spot.x, y: spot.y, hp: 1, recentTrail: [], lastDir: null, anim: null });
+    state.units.push({ id: idNum, ownerIndex, x: spot.x, y: spot.y, hp: 1, recentTrail: [], lastDir: null, anim: null, headingFrom: 0, headingTo: 0, headingStart: 0, headingEnd: 0 });
     if (pm) pm.knownFree.add(`${spot.x},${spot.y}`);
     i++;
   }
@@ -1413,6 +1426,26 @@ function drawUnit(ctx, u, tile, ox, oy) {
   ctx.font = `${Math.floor(tile * 0.6)}px ui-monospace, monospace`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.fillText(String(u.id), cx, cy + 1);
+
+  // Indicateur de direction (heading)
+  const now2 = performance.now();
+  const headingT = (u.headingEnd && u.headingEnd > now2)
+    ? easeOutCubic((now2 - u.headingStart) / (u.headingEnd - u.headingStart)) : 1;
+  const heading = (u.headingFrom ?? 0) + ((u.headingTo ?? 0) - (u.headingFrom ?? 0)) * Math.min(1, Math.max(0, headingT));
+  // Petit trait à l'extérieur du cercle: part légèrement au-delà du bord et s'étend vers l'extérieur
+  const startLen = r * 1.02;
+  const endLen = r * 1.45;
+  const sx = cx + Math.cos(heading) * startLen;
+  const sy = cy + Math.sin(heading) * startLen;
+  const hx = cx + Math.cos(heading) * endLen;
+  const hy = cy + Math.sin(heading) * endLen;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = Math.max(3, Math.floor(tile * 0.14));
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(sx, sy);
+  ctx.lineTo(hx, hy);
+  ctx.stroke();
   ctx.restore();
 }
 
