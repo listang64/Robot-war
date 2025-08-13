@@ -1514,10 +1514,18 @@ function drawUnit(ctx, u, tile, ox, oy) {
   const cy = oy + (ty + 0.5) * tile;
   const r = tile * 0.46; // cercle intérieur bien centré
   const color = getPlayerColor(u.ownerIndex);
+  const wallColor = '#151515';
   ctx.save();
-  // anneau
-  ctx.lineWidth = Math.max(2, Math.floor(tile * 0.08));
-  ctx.strokeStyle = shade(color, 0.6);
+  // remplissage intérieur (même teinte que les murs)
+  const ringW = Math.max(3, Math.floor(tile * 0.22));
+  const innerR = Math.max(1, r - ringW * 0.5);
+  ctx.fillStyle = wallColor;
+  ctx.beginPath();
+  ctx.arc(cx, cy, innerR, 0, Math.PI * 2);
+  ctx.fill();
+  // anneau épais pour futur jauges (couleur fixe)
+  ctx.lineWidth = ringW;
+  ctx.strokeStyle = '#222222';
   ctx.beginPath();
   ctx.arc(cx, cy, r, 0, Math.PI * 2);
   ctx.stroke();
@@ -1552,11 +1560,20 @@ function drawUnit(ctx, u, tile, ox, oy) {
 function drawUnitIconWithId(ctx, size, color, idText) {
   const c = size / 2;
   ctx.clearRect(0, 0, size, size);
-  // anneau
+  const wallColor = '#151515';
+  const r = size * 0.42;
+  const ringW = Math.max(2, Math.floor(size * 0.18));
+  const innerR = Math.max(1, r - ringW * 0.5);
+  // remplissage intérieur
   ctx.beginPath();
-  ctx.strokeStyle = 'rgba(200, 210, 230, 0.45)';
-  ctx.lineWidth = Math.max(2, Math.floor(size * 0.08));
-  ctx.arc(c, c, size * 0.42, 0, Math.PI * 2);
+  ctx.fillStyle = wallColor;
+  ctx.arc(c, c, innerR, 0, Math.PI * 2);
+  ctx.fill();
+  // anneau épais (couleur fixe)
+  ctx.beginPath();
+  ctx.strokeStyle = '#222222';
+  ctx.lineWidth = ringW;
+  ctx.arc(c, c, r, 0, Math.PI * 2);
   ctx.stroke();
   // id
   ctx.fillStyle = color;
