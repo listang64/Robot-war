@@ -24,6 +24,8 @@ const state = {
   programs: {}, // key `${ownerIndex}:${type}` -> number[] commands
   simIntervalId: null,
   animRafId: null,
+  // Cartographie partagée par joueur
+  playerMaps: [], // index -> { knownWalls:Set<string>, knownFree:Set<string>, visitCounts:Map<string,number> }
 };
 
 const q = (sel, el = document) => el.querySelector(sel);
@@ -87,6 +89,8 @@ function startGame() {
   state.hqs = computeHQs(state.players);
   state.units = [];
   state.isPaused = false;
+  // init cartographies partagées
+  state.playerMaps = Array.from({ length: state.players }, () => ({ knownWalls: new Set(), knownFree: new Set(), visitCounts: new Map() }));
   renderApp();
   // Démarre le cycle de tour après que la HUD soit montée
   requestAnimationFrame(() => startTurnTimer());
@@ -529,9 +533,10 @@ function stepSimulation() {
     }
     // Commande 6: explorer (avec mémoire locale des visites)
     if (cmds.includes(6)) {
-      if (!u.visitCounts) u.visitCounts = new Map();
+      const pm = state.playerMaps[u.ownerIndex];
+      if (!pm) continue;
       const k = `${u.x},${u.y}`;
-      u.visitCounts.set(k, (u.visitCounts.get(k) || 0) + 1);
+      pm.visitCounts.set(k, (pm.visitCounts.get(k) || 0) + 1);
       const step = (function choose() {
         const dirs = [ [1,0], [-1,0], [0,1], [0,-1] ];
         const collect = (allowReverse) => {
@@ -541,12 +546,12 @@ function stepSimulation() {
             const nx = u.x + d[0];
             const ny = u.y + d[1];
             if (!isInBounds(nx, ny)) continue;
-            if (u.knownWalls && u.knownWalls.has(`${nx},${ny}`)) continue;
+            if (pm.knownWalls && pm.knownWalls.has(`${nx},${ny}`)) continue;
             const blocked = isBlocked(nx, ny);
-            if (blocked) { if (u.knownWalls) u.knownWalls.add(`${nx},${ny}`); continue; }
+            if (blocked) { if (pm.knownWalls) pm.knownWalls.add(`${nx},${ny}`); continue; }
             if (unitAt(nx, ny)) continue;
             const key = `${nx},${ny}`;
-            const visits = (u.visitCounts.get(key) || 0);
+            const visits = (pm.visitCounts.get(key) || 0);
             let score = visits + Math.random() * 0.1;
             // Interdit strictement de revenir sur une des 6 dernières cases
             if (u.recentTrail && u.recentTrail.includes(key)) continue;
@@ -578,7 +583,7 @@ function stepSimulation() {
         u.anim = { fromX: u.x, fromY: u.y, toX: nx, toY: ny, startTime: now, endTime: now + 200 };
         updateRecentTrail(u, u.x, u.y);
         u.x = nx; u.y = ny; u.lastDir = step; moved = true;
-        if (u.knownFree) u.knownFree.add(`${u.x},${u.y}`);
+          if (pm.knownFree) pm.knownFree.add(`${u.x},${u.y}`);
       }
     }
   }
@@ -1314,7 +1319,10 @@ function spawnUnit(type) {
     }
   }
   if (!spot) return;
-  state.units.push({ id: cryptoRandomId(), ownerIndex: state.currentPlayerIndex, x: spot.x, y: spot.y, type, hp: 1, visitCounts: new Map(), knownWalls: new Set(), knownFree: new Set([`${spot.x},${spot.y}`]), recentTrail: [], lastDir: null, anim: null });
+  state.units.push({ id: cryptoRandomId(), ownerIndex: state.currentPlayerIndex, x: spot.x, y: spot.y, type, hp: 1, recentTrail: [], lastDir: null, anim: null });
+  // Marque la case comme connue libre pour ce joueur
+  const pm = state.playerMaps[state.currentPlayerIndex];
+  if (pm) pm.knownFree.add(`${spot.x},${spot.y}`);
   const panel = q('#spawnPanel'); if (panel) panel.classList.remove('visible');
   const canvas = q('#game'); if (canvas) drawScene(canvas);
 }
