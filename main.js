@@ -3,7 +3,7 @@ const state = {
   phase: "menu", // menu | playing
   players: 2,
   currentPlayerIndex: 0, // 0..3
-  playerColors: ["blue", "red", "purple", "yellow"],
+  playerColors: ["blue", "red", "purple", "green"],
   turnMs: 60_000,
   turnStart: 0,
   timerId: null,
@@ -214,7 +214,7 @@ function renderGame() {
   const devOverlay = el('div', { className: 'dev-overlay', id: 'devOverlay' });
   const devSide = el('div', { className: 'side-left' });
   const devList = el('div', { className: 'dev-list' });
-  const colors = [ 'blue', 'red', 'purple', 'yellow' ];
+  const colors = [ 'blue', 'red', 'purple', 'green' ];
   for (const col of colors) {
     const b = el('button');
     const icon = el('canvas', { width: 40, height: 40 });
@@ -286,7 +286,7 @@ function beginGame(players) {
 
 function drawPlayerButton() {
   const color = state.playerColors[state.currentPlayerIndex];
-  const map = { blue: 'player-blue', red: 'player-red', purple: 'player-purple', yellow: 'player-yellow' };
+  const map = { blue: 'player-blue', red: 'player-red', purple: 'player-purple', green: 'player-green' };
   const btn = q('#playerBtn');
   if (!btn) return; // HUD sans bouton joueur dans la vue actuelle
   btn.className = map[color] || 'player-blue';
@@ -413,10 +413,10 @@ function nextPlayer() {
 
 function getPlayerColor(idx) {
   const key = state.playerColors[idx];
-  const map = { blue: '#4f8cff', red: '#f55454', purple: '#9b5cff', yellow: '#ffd166' };
+  const map = { blue: '#4f8cff', red: '#f55454', purple: '#9b5cff', green: '#42d77d' };
   return map[key] || '#4f8cff';
 }
-function colorFromKey(key) { const map = { blue: '#4f8cff', red: '#f55454', purple: '#9b5cff', yellow: '#ffd166' }; return map[key] || '#4f8cff'; }
+function colorFromKey(key) { const map = { blue: '#4f8cff', red: '#f55454', purple: '#9b5cff', green: '#42d77d' }; return map[key] || '#4f8cff'; }
 
 function togglePause() {
   state.isPaused = !state.isPaused;
@@ -1252,7 +1252,7 @@ function drawHQ(ctx, hq, tile, ox, oy) {
   const cx = ox + (hq.cx + 0.5) * tile;
   const cy = oy + (hq.cy + 0.5) * tile;
   const radius = tile * 1.5; // ~3x3 cases
-  const palette = { blue: '#4f8cff', red: '#f55454', purple: '#9b5cff', yellow: '#ffd166' };
+  const palette = { blue: '#4f8cff', red: '#f55454', purple: '#9b5cff', green: '#42d77d' };
   const base = palette[hq.colorKey] || '#4f8cff';
 
   ctx.save();
