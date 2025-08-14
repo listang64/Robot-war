@@ -30,7 +30,7 @@ const state = {
   // Cartographie partagée par joueur
   playerMaps: [],
   // Sélection de modules pour la création d'unités
-  selectedModules: { movement: 0, armor: 0 }, // index -> { knownWalls:Set<string>, knownFree:Set<string>, visitCounts:Map<string,number> }
+  selectedModules: { movement: 0, shield: 0 }, // index -> { knownWalls:Set<string>, knownFree:Set<string>, visitCounts:Map<string,number> }
   nextUnitId: 1,
   nextLocalIdByPlayer: [],
   lastSimTime: 0,
@@ -262,8 +262,8 @@ function renderGame() {
   });
   devList.append(addEnergyBtn);
   // --- Bouton: Endommager modules unité ---
-  const damageModuleBtn = el('button', { className: 'dev-damage-module', title: 'Endommager modules de la dernière unité créée' });
-  damageModuleBtn.textContent = 'Dmg Modules';
+  const damageModuleBtn = el('button', { className: 'dev-damage-module', title: 'Endommager la dernière unité créée (boucliers en priorité)' });
+  damageModuleBtn.textContent = 'Dmg Unité';
   damageModuleBtn.addEventListener('click', () => {
     // Trouve la dernière unité créée (ID le plus élevé) qui a des modules
     const unitsWithModules = state.units.filter(u => u.modules && u.modules.length > 0);
@@ -273,28 +273,10 @@ function renderGame() {
     unitsWithModules.sort((a, b) => b.id - a.id);
     const lastUnit = unitsWithModules[0];
     
-    // Trouver le premier module fonctionnel (HP > 0) dans l'ordre des slots
-    let targetModule = null;
-    for (let i = 0; i < lastUnit.modules.length; i++) {
-      if (lastUnit.modules[i].hp > 0) {
-        targetModule = lastUnit.modules[i];
-        break;
-      }
-    }
+    // Appliquer 25 dégâts en utilisant le système de priorité des boucliers
+    damageUnit(lastUnit, 25);
     
-    if (targetModule) {
-      // Endommager le module de 25 HP
-      targetModule.hp = Math.max(0, targetModule.hp - 25);
-      console.log(`Module ${targetModule.type} de l'unité ${lastUnit.id} endommagé: ${targetModule.hp}/100 HP`);
-      
-      // Vérifier si l'unité n'a plus aucun module fonctionnel
-      const hasWorkingModules = lastUnit.modules.some(m => m.hp > 0);
-      if (!hasWorkingModules) {
-        console.log(`Unité ${lastUnit.id} détruite (plus de modules fonctionnels)`);
-      }
-      
-      const canvas = q('#game'); if (canvas) drawScene(canvas);
-    }
+    const canvas = q('#game'); if (canvas) drawScene(canvas);
   });
   devList.append(damageModuleBtn);
   const closeBtn = el('button', { className: 'dev-close', title: 'Fermer' });
@@ -470,7 +452,7 @@ function nextPlayer() {
   updateProgDisplay();
   // Remet à zéro les compteurs de modules pour le nouveau joueur
   state.selectedModules.movement = 0;
-  state.selectedModules.armor = 0;
+  state.selectedModules.shield = 0;
   updateModuleDisplay();
   updateEnergyCost();
   // Met à jour la couleur du bouton de programmation
@@ -2057,23 +2039,23 @@ function renderSpawnPanel() {
   const armorLabelContainer = el('div', { 
     style: 'display:flex;flex-direction:column;align-items:center;' 
   });
-  const armorLabel = el('span', { 
-    textContent: 'Armure', 
+  const shieldLabel = el('span', { 
+    textContent: 'Bouclier', 
     style: 'font-size:15px;color:#cfd6e6;margin-bottom:4px;font-weight:600;' 
   });
-  const armorCost = el('span', { 
+  const shieldCost = el('span', { 
     textContent: '75', 
     style: 'color:#ffd54a;font-size:14px;font-weight:800;' 
   });
-  armorLabelContainer.append(armorLabel, armorCost);
+  armorLabelContainer.append(shieldLabel, shieldCost);
   
   // Container pour les contrôles (à droite)
   const armorControlsContainer = el('div', { 
     style: 'display:flex;align-items:center;gap:6px;' 
   });
   
-  const armorCount = el('div', { 
-    id: 'armorCount',
+  const shieldCount = el('div', { 
+    id: 'shieldCount',
     textContent: '0', 
     style: 'background:#6b7280;color:#fff;border-radius:4px;padding:3px 6px;font-size:11px;min-width:20px;text-align:center;font-weight:600;' 
   });
@@ -2086,22 +2068,22 @@ function renderSpawnPanel() {
     style: 'width:20px;height:20px;border-radius:4px;border:1px solid #4b5563;background:#374151;color:#fff;font-size:12px;font-weight:600;display:flex;align-items:center;justify-content:center;cursor:pointer;' 
   });
   
-  armorControlsContainer.append(armorCount, armorMinus, armorPlus);
+  armorControlsContainer.append(shieldCount, armorMinus, armorPlus);
   armorLine.append(armorLabelContainer, armorControlsContainer);
   
-  // Event listeners pour Armure
+  // Event listeners pour Bouclier
   armorPlus.addEventListener('click', () => {
     const total = getTotalModules();
     if (total < 10) {
-      state.selectedModules.armor++;
+      state.selectedModules.shield++;
       updateModuleDisplay();
       updateEnergyCost();
     }
   });
   
   armorMinus.addEventListener('click', () => {
-    if (state.selectedModules.armor > 0) {
-      state.selectedModules.armor--;
+    if (state.selectedModules.shield > 0) {
+      state.selectedModules.shield--;
       updateModuleDisplay();
       updateEnergyCost();
     }
@@ -2164,6 +2146,45 @@ function createExplosion(tileX, tileY) {
   });
 }
 
+// Applique des dégâts à une unité en priorisant les modules de bouclier
+function damageUnit(unit, damage) {
+  if (!unit.modules || unit.modules.length === 0) return;
+  
+  let remainingDamage = damage;
+  
+  // Phase 1: Endommager les boucliers en priorité
+  const shields = unit.modules.filter(m => m.type === 'shield' && m.hp > 0);
+  for (const shield of shields) {
+    if (remainingDamage <= 0) break;
+    
+    const damageToApply = Math.min(remainingDamage, shield.hp);
+    shield.hp -= damageToApply;
+    remainingDamage -= damageToApply;
+    
+    console.log(`Bouclier endommagé: ${shield.hp}/100 HP restants`);
+  }
+  
+  // Phase 2: Si il reste des dégâts, endommager les autres modules
+  if (remainingDamage > 0) {
+    const otherModules = unit.modules.filter(m => m.type !== 'shield' && m.hp > 0);
+    for (const module of otherModules) {
+      if (remainingDamage <= 0) break;
+      
+      const damageToApply = Math.min(remainingDamage, module.hp);
+      module.hp -= damageToApply;
+      remainingDamage -= damageToApply;
+      
+      console.log(`Module ${module.type} endommagé: ${module.hp}/100 HP restants`);
+    }
+  }
+  
+  // Vérifier si l'unité doit être détruite
+  const hasWorkingModules = unit.modules.some(m => m.hp > 0);
+  if (!hasWorkingModules) {
+    console.log(`Unité ${unit.id} détruite par les dégâts`);
+  }
+}
+
 // Calcule le modificateur de vitesse basé sur le ratio modules de mouvement / autres modules
 function getSpeedModifier(unit) {
   if (!unit.modules || unit.modules.length === 0) return 1.0;
@@ -2193,9 +2214,9 @@ function updateModuleDisplay() {
   if (movementCount) {
     movementCount.textContent = state.selectedModules.movement.toString();
   }
-  const armorCount = q('#armorCount');
-  if (armorCount) {
-    armorCount.textContent = state.selectedModules.armor.toString();
+  const shieldCount = q('#shieldCount');
+  if (shieldCount) {
+    shieldCount.textContent = state.selectedModules.shield.toString();
   }
 }
 
@@ -2238,7 +2259,7 @@ function updateCreateButtonState() {
 }
 
 function calculateUnitCost() {
-  return state.selectedModules.movement * 50 + state.selectedModules.armor * 75; // 50 énergie par module de mouvement, 75 par module d'armure
+  return state.selectedModules.movement * 50 + state.selectedModules.shield * 75; // 50 énergie par module de mouvement, 75 par module de bouclier
 }
 
 function updateHqHpLine() {
@@ -2437,7 +2458,7 @@ function spawnUnit() {
   
   // Reset la sélection de modules après création
   state.selectedModules.movement = 0;
-  state.selectedModules.armor = 0;
+  state.selectedModules.shield = 0;
   updateModuleDisplay();
   updateEnergyCost();
   updateHqHpLine(); // Mettre à jour l'affichage de l'énergie du QG
@@ -2480,8 +2501,8 @@ function spawnUnitFromHQ(hq, ownerIndex, offsetIdx = 0) {
         for (let i = 0; i < state.selectedModules.movement; i++) {
           modules.push({ type: 'movement', hp: 100, maxHp: 100 });
         }
-        for (let i = 0; i < state.selectedModules.armor; i++) {
-          modules.push({ type: 'armor', hp: 100, maxHp: 100 });
+        for (let i = 0; i < state.selectedModules.shield; i++) {
+          modules.push({ type: 'shield', hp: 100, maxHp: 100 });
         }
       } else { // Unités initiales (spawn automatique au début)
         // Une unité initiale basique sans module
@@ -2635,8 +2656,8 @@ function drawModuleRing(ctx, u, cx, cy, r, ringW) {
             case 'movement':
               moduleColor = '#6b7280'; // Gris clair pour mouvement
               break;
-            case 'armor':
-              moduleColor = '#1e90ff'; // Bleu vif pour armure
+            case 'shield':
+              moduleColor = '#1e90ff'; // Bleu vif pour bouclier
               break;
             default:
               moduleColor = '#6b7280';
