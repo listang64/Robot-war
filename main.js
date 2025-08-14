@@ -1877,15 +1877,19 @@ function drawUnit(ctx, u, tile, ox, oy) {
   const headingT = (u.headingEnd && u.headingEnd > now2)
     ? easeOutCubic((now2 - u.headingStart) / (u.headingEnd - u.headingStart)) : 1;
   const heading = (u.headingFrom ?? 0) + ((u.headingTo ?? 0) - (u.headingFrom ?? 0)) * Math.min(1, Math.max(0, headingT));
-  // Petit trait à l'extérieur du cercle: part légèrement au-delà du bord et s'étend vers l'extérieur
-  const startLen = r * 1.02;
-  const endLen = r * 1.45;
+  // Petit trait directionnel à l'extérieur du cercle:
+  // démarre juste APRÈS l'extérieur de l'anneau sans chevauchement (prend en compte ringW et l'épaisseur du trait)
+  const dirW = Math.max(3, Math.floor(tile * 0.14));
+  const outerRing = r + ringW * 0.5; // rayon extérieur de l'anneau
+  const startLen = outerRing + dirW * 0.5 + Math.max(1, Math.floor(tile * 0.02));
+  // longueur réduite d'un tiers
+  const endLen = startLen + Math.max(3, Math.floor(tile * 0.36));
   const sx = cx + Math.cos(heading) * startLen;
   const sy = cy + Math.sin(heading) * startLen;
   const hx = cx + Math.cos(heading) * endLen;
   const hy = cy + Math.sin(heading) * endLen;
   ctx.strokeStyle = color;
-  ctx.lineWidth = Math.max(3, Math.floor(tile * 0.14));
+  ctx.lineWidth = dirW;
   ctx.lineCap = 'round';
   ctx.beginPath();
   ctx.moveTo(sx, sy);
