@@ -119,13 +119,7 @@ function startGame() {
   // init cartographies partagées
   state.playerMaps = Array.from({ length: state.players }, () => ({ knownWalls: new Set(), knownFree: new Set(), visitCounts: new Map() }));
   populateFullMapKnowledge();
-  // Spawns init: 3 unités par joueur, à côté du QG
-  for (let i = 0; i < state.players; i++) {
-    const colorKey = state.playerColors[i];
-    const hq = state.hqs.find(h => h.colorKey === colorKey);
-    if (!hq) continue;
-    spawnInitialUnitsAtHQ(hq, i, 3);
-  }
+  // Plus de spawn initial automatique
   // Le jeu démarre en pause
   state.isPaused = true;
   // init cartographies partagées
@@ -152,11 +146,7 @@ function regenerateMapKeepPause() {
   state.programs = {}; // nettoie les anciens programmes liés à d'anciens IDs
   state.playerMaps = Array.from({ length: state.players }, () => ({ knownWalls: new Set(), knownFree: new Set(), visitCounts: new Map() }));
   populateFullMapKnowledge();
-  for (let i = 0; i < state.players; i++) {
-    const colorKey = state.playerColors[i];
-    const hq = state.hqs.find(h => h.colorKey === colorKey);
-    if (hq) spawnInitialUnitsAtHQ(hq, i, 3);
-  }
+  // Plus de spawn initial automatique
   // Assure pause et overlay visibles
   state.isPaused = wasPaused || true;
   const so = q('#startOverlay'); if (so && !so.classList.contains('visible')) so.classList.add('visible');
@@ -633,7 +623,12 @@ document.addEventListener('click', (e) => {
   if (unitAt(gx, gy)) return;
   const ownerIndex = Math.max(0, state.playerColors.indexOf(devSpawnSelection.colorKey));
   const idNum = state.nextUnitId++;
-  state.units.push({ id: idNum, ownerIndex, x: gx, y: gy, hp: 1, recentTrail: [], lastDir: null, anim: null });
+  // Les unités créées via le développeur ont toujours 2 modules de mouvement
+  const modules = [
+    { type: 'movement', hp: 100, maxHp: 100 },
+    { type: 'movement', hp: 100, maxHp: 100 }
+  ];
+  state.units.push({ id: idNum, ownerIndex, x: gx, y: gy, hp: 1, modules: modules, recentTrail: [], lastDir: null, anim: null });
   const canvas2 = q('#game'); if (canvas2) drawScene(canvas2);
   devSpawnSelection = null;
   const ov = q('#devOverlay'); if (ov) ov.classList.remove('visible');
@@ -689,6 +684,11 @@ function stepSimulation(dt = 0) {
     if (u.anim && performance.now() < u.anim.endTime) continue;
     const cmds = state.programs[String(u.id)];
     if (!cmds || cmds.length === 0) continue;
+    
+    // Vérifier si l'unité peut se déplacer (a des modules de mouvement fonctionnels)
+    if (!hasWorkingMovementModule(u)) {
+      continue; // L'unité ne peut pas se déplacer
+    }
     // Commande 7 + 18 (QG): aller vers QG (sinon explorer jusqu'à découverte)
     if (cmds[0] === 7 && cmds[1] === 18) {
       const myHq = state.hqs.find(h => h.colorKey === state.playerColors[u.ownerIndex]);
@@ -1837,6 +1837,7 @@ function renderSpawnPanel() {
     style: 'display:flex;align-items:center;justify-content:space-between;padding:16px 24px;gap:20px;' 
   });
   const btn = button('Créer', () => spawnUnit());
+  btn.id = 'createBtn'; // Ajouter un ID pour pouvoir le retrouver
   btn.style.fontSize = '12px';
   btn.style.padding = '6px 12px';
   btn.style.borderRadius = '6px';
@@ -1930,11 +1931,18 @@ function renderSpawnPanel() {
   // init texte PV et coût énergie
   updateHqHpLine();
   updateEnergyCost();
+  updateCreateButtonState(); // État initial du bouton
   return panel;
 }
 
 function getTotalModules() {
   return Object.values(state.selectedModules).reduce((sum, count) => sum + count, 0);
+}
+
+// Vérifie si une unité a au moins un module de mouvement fonctionnel (HP > 0)
+function hasWorkingMovementModule(unit) {
+  if (!unit.modules || unit.modules.length === 0) return false;
+  return unit.modules.some(module => module.type === 'movement' && module.hp > 0);
 }
 
 function updateModuleDisplay() {
@@ -1949,6 +1957,36 @@ function updateEnergyCost() {
   if (energyCost) {
     const cost = calculateUnitCost();
     energyCost.textContent = `${cost} ⚡`;
+  }
+  updateCreateButtonState();
+}
+
+function updateCreateButtonState() {
+  const btn = q('#createBtn');
+  if (!btn) return;
+  
+  const totalModules = getTotalModules();
+  const cost = calculateUnitCost();
+  const key = state.playerColors[state.currentPlayerIndex];
+  const hq = state.hqs && state.hqs.find(h => h.colorKey === key);
+  const currentEnergy = hq ? hq.energy : 0;
+  
+  const canCreate = totalModules > 0 && currentEnergy >= cost;
+  
+  if (canCreate) {
+    // État normal (vert)
+    btn.style.background = 'linear-gradient(180deg, #2ec27e, #1f9e66)';
+    btn.style.border = '1px solid #178a57';
+    btn.style.color = '#0b0e14';
+    btn.style.opacity = '1';
+    btn.style.cursor = 'pointer';
+  } else {
+    // État grisé
+    btn.style.background = 'linear-gradient(180deg, #6b7280, #4b5563)';
+    btn.style.border = '1px solid #374151';
+    btn.style.color = '#9ca3af';
+    btn.style.opacity = '0.7';
+    btn.style.cursor = 'not-allowed';
   }
 }
 
@@ -1967,6 +2005,7 @@ function updateHqHpLine() {
   hpLine.style.fontWeight = '800';
   const energyLine = q('#hqEnergyLine');
   if (energyLine) energyLine.textContent = `${hq.energy} / ${hq.energyMax}`;
+  updateCreateButtonState(); // Mettre à jour le bouton quand l'énergie change
 }
 
 function updateSpawnCreateIconColor() {
@@ -2082,7 +2121,7 @@ document.addEventListener('click', (e) => {
   // Vérifie clic sur un QG du joueur actif
   const activeKey = state.playerColors[state.currentPlayerIndex];
   const myHq = state.hqs.find(h => h.colorKey === activeKey);
-  if (myHq && Math.abs(gx - myHq.cx) <= HQ_HALF_SPAN && Math.abs(gy - myHq.cy) <= HQ_HALF_SPAN) {
+  if (myHq && Math.abs(gx - myHq.cx) <= HQ_HALF_SPAN - 1 && Math.abs(gy - myHq.cy) <= HQ_HALF_SPAN - 1) {
     // toggle panel
     panel.classList.toggle('visible');
     // recolor toutes les icônes selon le joueur actif
@@ -2123,6 +2162,13 @@ function spawnUnit() {
     return;
   }
   
+  // Vérifier qu'au moins un module est sélectionné
+  const totalModules = getTotalModules();
+  if (totalModules === 0) {
+    console.log('Aucun module sélectionné!');
+    return;
+  }
+  
   // Vérifier si on a assez d'énergie
   const cost = calculateUnitCost();
   console.log('Coût calculé:', cost, 'Énergie HQ:', hq.energy);
@@ -2147,6 +2193,7 @@ function spawnUnit() {
   updateModuleDisplay();
   updateEnergyCost();
   updateHqHpLine(); // Mettre à jour l'affichage de l'énergie du QG
+  updateCreateButtonState(); // Mettre à jour l'état du bouton après création
   const panel = q('#spawnPanel'); if (panel) panel.classList.remove('visible');
   const canvas = q('#game'); if (canvas) drawScene(canvas);
 }
