@@ -444,6 +444,8 @@ function nextPlayer() {
   if (progBtn) progBtn.style.setProperty('--progColor', getPlayerColor(state.currentPlayerIndex));
   drawPlayerButton();
   updateSpawnCreateIconColor();
+  // S'assure que la connaissance globale reste en place pour tous les joueurs
+  populateFullMapKnowledge();
   if (state.timerId) cancelAnimationFrame(state.timerId);
   const tick = () => {
     if (!state.isPaused) {
@@ -880,12 +882,12 @@ function planStepToHQUsingSharedMap(u, hq) {
   const startKey = `${u.x},${u.y}`;
   const goalKey = `${hq.cx},${hq.cy}`;
 
-  // Autorise la case de départ même si non marquée, et la case but
+  // Les unités ne peuvent jamais traverser les cellules des QG, même pour aller au centre
   const isKnownWalkable = (x, y) => {
     if (!isInBounds(x, y)) return false;
     // Avec connaissance globale: on s'appuie sur la carte réelle
     if (state.tiles[y][x]) return false;
-    if (isHQCell(x, y) && !(x === hq.cx && y === hq.cy)) return false;
+    if (isHQCell(x, y)) return false; // Aucune cellule HQ n'est traversable
     return true;
   };
 
@@ -903,7 +905,13 @@ function planStepToHQUsingSharedMap(u, hq) {
     return arr;
   };
 
-  const h = (x, y) => Math.abs(hq.cx - x) + Math.abs(hq.cy - y);
+  // Heuristique: distance vers le périmètre du QG (pas le centre)
+  const h = (x, y) => {
+    // Distance vers le bord le plus proche du périmètre HQ
+    const dx = Math.max(0, Math.abs(x - hq.cx) - HQ_PERIM_RADIUS);
+    const dy = Math.max(0, Math.abs(y - hq.cy) - HQ_PERIM_RADIUS);
+    return dx + dy;
+  };
 
   const open = new MinHeap((a, b) => a.f - b.f);
   const gScore = new Map();
@@ -924,7 +932,7 @@ function planStepToHQUsingSharedMap(u, hq) {
     const ck = `${cur.x},${cur.y}`;
     if (closed.has(ck)) continue;
     closed.add(ck);
-    if (cur.x === hq.cx && cur.y === hq.cy) { foundKey = ck; break; }
+    if (isAtHQPerimeter(cur.x, cur.y, hq)) { foundKey = ck; break; }
     for (const nb of neighbors(cur.x, cur.y)) {
       const nk = `${nb.x},${nb.y}`;
       if (closed.has(nk)) continue;
@@ -1065,8 +1073,14 @@ function populateFullMapKnowledge() {
     pm.knownWalls.clear();
     for (let y = 0; y < state.rows; y++) {
       for (let x = 0; x < state.cols; x++) {
-        if (state.tiles[y][x]) pm.knownWalls.add(`${x},${y}`);
-        else pm.knownFree.add(`${x},${y}`);
+        if (state.tiles[y][x]) {
+          pm.knownWalls.add(`${x},${y}`);
+        } else if (isHQCell(x, y)) {
+          // Les cellules des QG sont considérées comme des murs (infranchissables)
+          pm.knownWalls.add(`${x},${y}`);
+        } else {
+          pm.knownFree.add(`${x},${y}`);
+        }
       }
     }
   }
