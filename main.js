@@ -561,9 +561,27 @@ function onProgValidate() {
   const myUnit = state.units.find(u => String(u.id) === unitId && u.ownerIndex === state.currentPlayerIndex);
   if (!myUnit) { programBuffer = ''; updateProgDisplay(); return; }
   const cmdTokens = tokens.slice(1);
-  // Commande spéciale 00: réinitialise le programme du type ciblé pour le joueur actif
+  // Commande spéciale 00: détruit l'unité ciblée
   if (cmdTokens.includes('00')) {
-    delete state.programs[unitId];
+    // Supprimer l'unité de la liste
+    const unitIndex = state.units.findIndex(u => u.id === myUnit.id);
+    if (unitIndex !== -1) {
+      // Créer une explosion à la position de l'unité avant de la détruire
+      createExplosion(myUnit.x, myUnit.y);
+      
+      // Supprimer l'unité du jeu
+      state.units.splice(unitIndex, 1);
+      
+      // Supprimer le programme associé
+      delete state.programs[unitId];
+      
+      console.log(`Unité ${unitId} détruite par commande 00`);
+      
+      // Mettre à jour l'affichage
+      const canvas = q('#game'); 
+      if (canvas) drawScene(canvas);
+    }
+    
     programBuffer = '';
     updateProgDisplay();
     return;
