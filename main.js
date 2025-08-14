@@ -2929,8 +2929,51 @@ function fbmNoise2D(x, y, octaves = 4) {
   return total / maxAmp;
 }
 
-// Lancement
-window.addEventListener('DOMContentLoaded', mountApp);
+// Désactive le zoom au double tap sur iOS/iPad
+function preventZoom() {
+  // Empêche le zoom au double tap
+  let lastTouchEnd = 0;
+  document.addEventListener('touchend', function (event) {
+    const now = (new Date()).getTime();
+    if (now - lastTouchEnd <= 300) {
+      event.preventDefault();
+    }
+    lastTouchEnd = now;
+  }, false);
+
+  // Empêche le zoom par pincement
+  document.addEventListener('gesturestart', function (e) {
+    e.preventDefault();
+  }, false);
+
+  document.addEventListener('gesturechange', function (e) {
+    e.preventDefault();
+  }, false);
+
+  document.addEventListener('gestureend', function (e) {
+    e.preventDefault();
+  }, false);
+
+  // Empêche le zoom avec Ctrl+molette
+  document.addEventListener('wheel', function (e) {
+    if (e.ctrlKey) {
+      e.preventDefault();
+    }
+  }, { passive: false });
+
+  // Empêche le zoom avec Ctrl+Plus/Moins
+  document.addEventListener('keydown', function (e) {
+    if ((e.ctrlKey || e.metaKey) && (e.key === '+' || e.key === '-' || e.key === '=' || e.key === '0')) {
+      e.preventDefault();
+    }
+  });
+}
+
+// Lancement avec protection anti-zoom
+window.addEventListener('DOMContentLoaded', () => {
+  preventZoom(); // Initialise la protection anti-zoom
+  mountApp();
+});
 
 
 

@@ -10,16 +10,51 @@
   --warning: #42d77d;
 }
 
-* { box-sizing: border-box; }
-html, body { height: 100%; }
+* { 
+  box-sizing: border-box; 
+  /* Désactive le zoom au double tap sur iOS/iPad */
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html, body { 
+  height: 100%; 
+  /* Empêche le zoom tactile */
+  touch-action: manipulation;
+  -ms-touch-action: manipulation;
+  -webkit-text-size-adjust: 100%;
+  -ms-text-size-adjust: 100%;
+}
+
 body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
   font-family: ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+  /* Désactive complètement le zoom */
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
 }
 
-#app { height: 100dvh; }
+#app { 
+  height: 100dvh; 
+  /* Désactive le zoom tactile sur l'application entière */
+  touch-action: manipulation;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Canvas du jeu - désactivation complète du zoom */
+#game {
+  touch-action: manipulation;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
 
 /* Menu principal */
 .menu-screen {
@@ -130,7 +165,16 @@ canvas#game {
 }
 
 /* Dev overlay (left side) */
-.dev-overlay { position: absolute; inset: 0; display: none; }
+.dev-overlay { 
+  position: absolute; 
+  inset: 0; 
+  display: none;
+  /* Désactive complètement le zoom tactile */
+  touch-action: manipulation;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
 .dev-overlay.visible { display: block; }
 .dev-overlay .side-left {
   position: absolute; top: 0; left: 0; bottom: 28px; width: fit-content; max-width: 60vw;
@@ -216,6 +260,11 @@ canvas#game {
   backdrop-filter: blur(8px) saturate(1.1);
   pointer-events: auto;
   display: none;
+  /* Désactive complètement le zoom tactile */
+  touch-action: manipulation;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
 }
 .spawn-panel.visible { display: block; }
 .spawn-panel h3 { margin: 0 0 10px; font-size: 16px; color: var(--text); }
@@ -245,7 +294,14 @@ canvas#game {
 
 /* Overlay programmation */
 .program-overlay {
-  position: absolute; inset: 0; display: none;
+  position: absolute; 
+  inset: 0; 
+  display: none;
+  /* Désactive complètement le zoom tactile */
+  touch-action: manipulation;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
 }
 .program-overlay.visible { display: block; }
 .program-overlay .side {
