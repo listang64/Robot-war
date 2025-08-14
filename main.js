@@ -23,6 +23,7 @@ const state = {
   hqs: [],
   units: [], // { id, ownerIndex, x, y, hp, recentTrail, lastDir, anim }
   programs: {}, // key unitId -> number[] commands
+  explosions: [], // { x, y, startTime, duration, particles: [{x, y, vx, vy, life}] }
   simIntervalId: null,
   animRafId: null,
   simRafId: null,
@@ -713,6 +714,10 @@ function stepSimulation(dt = 0) {
     const unitIndex = unitsToRemove[i];
     const removedUnit = state.units[unitIndex];
     console.log(`Unité ${removedUnit.id} supprimée (plus de modules fonctionnels)`);
+    
+    // Créer une animation d'explosion avant de supprimer l'unité
+    createExplosion(removedUnit.x, removedUnit.y);
+    
     state.units.splice(unitIndex, 1);
     // Nettoyer aussi ses programmes
     delete state.programs[String(removedUnit.id)];
@@ -1190,6 +1195,9 @@ function drawScene(canvas) {
     }
   }
 
+  // Dessiner les explosions par-dessus tout
+  drawExplosions(ctx, tile, ox, oy);
+
   ctx.restore();
 }
 
@@ -1205,6 +1213,65 @@ function startUiAnimationLoop() {
     uiAnimRafId = requestAnimationFrame(tick);
   };
   uiAnimRafId = requestAnimationFrame(tick);
+}
+
+function drawExplosions(ctx, tile, ox, oy) {
+  const now = performance.now();
+  
+  // Nettoyer les explosions terminées
+  state.explosions = state.explosions.filter(explosion => {
+    const elapsed = now - explosion.startTime;
+    return elapsed < explosion.duration;
+  });
+  
+  // Dessiner chaque explosion active
+  for (const explosion of state.explosions) {
+    const elapsed = now - explosion.startTime;
+    const progress = elapsed / explosion.duration; // 0.0 à 1.0
+    
+    const centerX = ox + explosion.tileX * tile + tile / 2;
+    const centerY = oy + explosion.tileY * tile + tile / 2;
+    
+    ctx.save();
+    
+    // Mettre à jour et dessiner chaque particule
+    for (const particle of explosion.particles) {
+      // Mise à jour de la position
+      particle.x += particle.vx * tile * 0.03; // Vitesse adaptée au tile
+      particle.y += particle.vy * tile * 0.03;
+      particle.life = 1.0 - progress; // Diminue avec le temps
+      
+      if (particle.life > 0) {
+        // Position de la particule
+        const px = centerX + particle.x;
+        const py = centerY + particle.y;
+        
+        // Taille et opacité basées sur la vie restante
+        const size = Math.max(1, tile * 0.15 * particle.life);
+        const alpha = particle.life * 0.8;
+        
+        // Couleur de l'explosion (orange/rouge)
+        const red = Math.floor(255 * Math.min(1, particle.life + 0.5));
+        const green = Math.floor(200 * particle.life);
+        const blue = 0;
+        
+        ctx.fillStyle = `rgba(${red}, ${green}, ${blue}, ${alpha})`;
+        ctx.beginPath();
+        ctx.arc(px, py, size, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Ajouter un petit halo
+        if (particle.life > 0.5) {
+          ctx.fillStyle = `rgba(255, 255, 100, ${alpha * 0.3})`;
+          ctx.beginPath();
+          ctx.arc(px, py, size * 1.5, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    }
+    
+    ctx.restore();
+  }
 }
 
 function drawStylizedFloor(ctx, widthCss, heightCss) {
@@ -2066,6 +2133,35 @@ function hasWorkingMovementModule(unit) {
 function hasAnyWorkingModule(unit) {
   if (!unit.modules || unit.modules.length === 0) return false;
   return unit.modules.some(module => module.hp > 0);
+}
+
+// Crée une animation d'explosion à la position donnée
+function createExplosion(tileX, tileY) {
+  const now = performance.now();
+  const duration = 800; // 800ms d'animation
+  const particleCount = 12;
+  const particles = [];
+  
+  // Créer les particules avec des directions aléatoires
+  for (let i = 0; i < particleCount; i++) {
+    const angle = (Math.PI * 2 * i) / particleCount + (Math.random() - 0.5) * 0.5;
+    const speed = 0.5 + Math.random() * 1.0;
+    particles.push({
+      x: 0, // Position relative au centre
+      y: 0,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      life: 1.0 // 1.0 = vivant, 0.0 = mort
+    });
+  }
+  
+  state.explosions.push({
+    tileX,
+    tileY,
+    startTime: now,
+    duration,
+    particles
+  });
 }
 
 // Calcule le modificateur de vitesse basé sur le ratio modules de mouvement / autres modules
