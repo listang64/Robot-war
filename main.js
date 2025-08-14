@@ -53,6 +53,10 @@ const HQ_HOLE_METRICS = {
   heightRatio: 0.14,  // non utilisé directement (on garde la hauteur via "tile")
   offsetYRatio: 0.128, // encore un peu plus bas
 };
+// Géométrie approximative du trou central (cercle) pour la jauge d'énergie
+const HQ_CENTER_HOLE_METRICS = {
+  diameterRatio: 0.36, // diamètre ~36% de la taille du sprite
+};
 
 function mountApp() {
   preloadHQImages();
@@ -248,6 +252,18 @@ function renderGame() {
     // ne ferme pas l'overlay
   });
   devList.append(dmgBtn);
+  // --- Bouton: +100 ENERGIE QG actif ---
+  const addEnergyBtn = el('button', { className: 'dev-energy', title: '+100 Énergie QG actif' });
+  addEnergyBtn.textContent = '+100 Énergie';
+  addEnergyBtn.addEventListener('click', () => {
+    const key = state.playerColors[state.currentPlayerIndex];
+    const hq = state.hqs && state.hqs.find(h => h.colorKey === key);
+    if (!hq) return;
+    hq.energy = Math.min(hq.energyMax || 1000, (hq.energy ?? 0) + 100);
+    const canvas = q('#game'); if (canvas) drawScene(canvas);
+    // ne ferme pas l'overlay
+  });
+  devList.append(addEnergyBtn);
   const closeBtn = el('button', { className: 'dev-close', title: 'Fermer' });
   closeBtn.textContent = 'X';
   closeBtn.addEventListener('click', () => { const ov = q('#devOverlay'); if (ov) ov.classList.remove('visible'); devSpawnSelection = null; });
@@ -1321,7 +1337,7 @@ function computeHQs(numPlayers) {
     const target = cands[pick[i]];
     const near = findOpenCenterNear(target.x, target.y, minSep, result);
     ensureOpenHQArea(near.x, near.y);
-    result.push({ cx: near.x, cy: near.y, colorKey: state.playerColors[i], hp: 1000, hpMax: 1000 });
+    result.push({ cx: near.x, cy: near.y, colorKey: state.playerColors[i], hp: 1000, hpMax: 1000, energy: 300, energyMax: 1000 });
   }
   return result;
 }
@@ -1380,7 +1396,8 @@ function drawHQ(ctx, hq, tile, ox, oy) {
   const img = HQ_IMAGES[hq.colorKey];
 
   if (img && img.complete && img.naturalWidth > 0) {
-    // Jauge derrière l'image, visible via l'encoche transparente
+    // Jauges derrière l'image, visibles via les ouvertures
+    drawHQEnergyBar(ctx, hq, tile, cx, cy, size);
     drawHQHealthBar(ctx, hq, tile, cx, cy, size, 'hole');
     ctx.save();
     ctx.imageSmoothingEnabled = true;
@@ -1446,15 +1463,54 @@ function drawHQHealthBar(ctx, hq, tile, cx, cy, size, placement = 'hole') {
   ctx.restore();
 }
 
+function drawHQEnergyBar(ctx, hq, tile, cx, cy, size) {
+  // Jauge verticale dans le trou central (remplissage 0 -> bas, 1000 -> haut)
+  const d = Math.floor(size * HQ_CENTER_HOLE_METRICS.diameterRatio);
+  const r = Math.floor(d / 2);
+  const thickness = Math.max(1, Math.floor(tile * 0.06));
+  const innerR = Math.max(1, r - thickness);
+  const innerD = innerR * 2;
+  const innerX = Math.round(cx - innerR);
+  const innerY = Math.round(cy - innerR);
+  const e = (hq && typeof hq.energy === 'number') ? hq.energy : 0;
+  const eMax = (hq && typeof hq.energyMax === 'number') ? hq.energyMax : 1000;
+  const ratio = Math.max(0, Math.min(1, eMax > 0 ? (e / eMax) : 0));
+
+  ctx.save();
+  // Fond assombri (cercle plein)
+  ctx.fillStyle = 'rgba(0,0,0,0.65)';
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Clip à l'intérieur du trou pour garder les bords arrondis
+  ctx.beginPath();
+  ctx.arc(cx, cy, innerR, 0, Math.PI * 2);
+  ctx.clip();
+
+  // Remplissage vertical (bottom->top) en jaune sur toute la hauteur utile
+  // Zone utile centrée verticalement, hauteur ≈ 1 tuile (taille d'une unité)
+  const usable = Math.max(4, Math.min(innerD, Math.floor(tile * 1.0)));
+  let yBase = innerY + Math.floor((innerD - usable) / 2);
+  const offsetUp = Math.floor(tile * 0.20); // décalage vers le haut
+  yBase = Math.max(innerY, yBase - offsetUp);
+  const fillHeight = Math.floor(usable * ratio);
+  ctx.fillStyle = '#ffd54a';
+  ctx.fillRect(innerX, yBase + (usable - fillHeight), innerD, fillHeight);
+  ctx.restore();
+}
+
 // --- Panel et logique de spawn ---
 function renderSpawnPanel() {
   const panel = el('div', { className: 'spawn-panel', id: 'spawnPanel' });
   // En-tête QG + PV (centrés)
   const header = el('div', { style: 'text-align:center;' });
   const title = el('h3', { textContent: 'QG', style: 'margin:0 0 4px 0;' });
-  const hpLabel = el('div', { id: 'hqHpLabel', textContent: 'Points de vie', style: 'color:#ffd54a;font-weight:800;margin:0 0 4px 0;' });
-  const hpLine = el('div', { id: 'hqHpLine', style: 'color:#ffd54a;font-weight:800;margin:0 0 10px 0;' });
-  header.append(title, hpLabel, hpLine);
+  const hpLabel = el('div', { id: 'hqHpLabel', textContent: 'Points de vie', style: 'color:#39ff14;font-weight:800;margin:0 0 4px 0;' });
+  const hpLine = el('div', { id: 'hqHpLine', style: 'color:#39ff14;font-weight:800;margin:0 0 12px 0;' });
+  const energyLabel = el('div', { id: 'hqEnergyLabel', textContent: 'Énergie', style: 'color:#ffd54a;font-weight:800;margin:6px 0 4px 0;' });
+  const energyLine = el('div', { id: 'hqEnergyLine', style: 'color:#ffd54a;font-weight:800;margin:0 0 10px 0;' });
+  header.append(title, hpLabel, hpLine, energyLabel, energyLine);
   panel.append(header);
 
   const list = el('div', { className: 'unit-list' });
@@ -1478,8 +1534,10 @@ function updateHqHpLine() {
   const hq = state.hqs && state.hqs.find(h => h.colorKey === key);
   if (!hq) { hpLine.textContent = ''; return; }
   hpLine.textContent = `${hq.hp} / ${hq.hpMax}`;
-  hpLine.style.color = '#ffd54a';
+  hpLine.style.color = '#39ff14';
   hpLine.style.fontWeight = '800';
+  const energyLine = q('#hqEnergyLine');
+  if (energyLine) energyLine.textContent = `${hq.energy} / ${hq.energyMax}`;
 }
 
 function updateSpawnCreateIconColor() {
