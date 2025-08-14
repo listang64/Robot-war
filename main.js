@@ -278,6 +278,7 @@ function renderGame() {
   setTimeout(() => {
     resizeCanvas(canvas);
     drawScene(canvas);
+    startUiAnimationLoop();
   });
 
   // Sur resize, on NE régénère PAS: on ajuste juste l'échelle pour voir la carte entière
@@ -906,6 +907,20 @@ function drawScene(canvas) {
   ctx.restore();
 }
 
+// Boucle d'animation UI pour effets visuels (ondulation énergie)
+let uiAnimRafId = null;
+function startUiAnimationLoop() {
+  if (uiAnimRafId) cancelAnimationFrame(uiAnimRafId);
+  const canvas = q('#game');
+  if (!canvas) return;
+  const tick = () => {
+    // Redessine périodiquement pour animer l'onde
+    drawScene(canvas);
+    uiAnimRafId = requestAnimationFrame(tick);
+  };
+  uiAnimRafId = requestAnimationFrame(tick);
+}
+
 function drawStylizedFloor(ctx, widthCss, heightCss) {
   // Fond = couleur des murs
   ctx.fillStyle = '#1c1c1c';
@@ -1488,15 +1503,36 @@ function drawHQEnergyBar(ctx, hq, tile, cx, cy, size) {
   ctx.arc(cx, cy, innerR, 0, Math.PI * 2);
   ctx.clip();
 
-  // Remplissage vertical (bottom->top) en jaune sur toute la hauteur utile
-  // Zone utile centrée verticalement, hauteur ≈ 1 tuile (taille d'une unité)
+  // Remplissage vertical (bottom->top) avec crête ondulée
   const usable = Math.max(4, Math.min(innerD, Math.floor(tile * 1.0)));
   let yBase = innerY + Math.floor((innerD - usable) / 2);
-  const offsetUp = Math.floor(tile * 0.20); // décalage vers le haut
+  const offsetUp = Math.floor(tile * 0.20);
   yBase = Math.max(innerY, yBase - offsetUp);
   const fillHeight = Math.floor(usable * ratio);
-  ctx.fillStyle = '#ffd54a';
-  ctx.fillRect(innerX, yBase + (usable - fillHeight), innerD, fillHeight);
+  const yTop = yBase + (usable - fillHeight);
+
+  // Zone pleine sous l'onde
+  if (fillHeight > 0) {
+    ctx.fillStyle = '#ffd54a';
+    ctx.fillRect(innerX, Math.min(innerY + innerD, yTop + Math.max(0, Math.floor(tile * 0.08))), innerD, Math.max(0, (yBase + usable) - (yTop + Math.max(0, Math.floor(tile * 0.08)))));
+
+    // Crête ondulée
+    const cycles = 2.2; // vagues
+    const phase = performance.now() * 0.003; // plus lent
+    const amp = Math.min(Math.max(1, Math.floor(tile * 0.08)), Math.floor(fillHeight * 0.4)); // moins haut
+    ctx.beginPath();
+    ctx.moveTo(innerX, yTop + amp * Math.sin(phase));
+    for (let i = 0; i <= innerD; i++) {
+      const x = innerX + i;
+      const t = (i / innerD) * (Math.PI * 2 * cycles);
+      const y = yTop + amp * Math.sin(t + phase);
+      ctx.lineTo(x, y);
+    }
+    ctx.lineTo(innerX + innerD, yBase + usable);
+    ctx.lineTo(innerX, yBase + usable);
+    ctx.closePath();
+    ctx.fill();
+  }
   ctx.restore();
 }
 
