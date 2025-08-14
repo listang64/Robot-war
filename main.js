@@ -43,7 +43,13 @@ const el = (tag, props = {}, children = []) => {
   return n;
 };
 
+// --- Paramètres QG ---
+const HQ_SIZE_TILES = 6; // largeur/hauteur du QG en tuiles
+const HQ_HALF_SPAN = Math.floor(HQ_SIZE_TILES / 2); // 3 pour 6x6
+const HQ_PERIM_RADIUS = HQ_HALF_SPAN + 2; // zone de proximité pour "aller vers QG"
+
 function mountApp() {
+  preloadHQImages();
   renderApp();
 }
 
@@ -417,6 +423,23 @@ function getPlayerColor(idx) {
   return map[key] || '#4f8cff';
 }
 function colorFromKey(key) { const map = { blue: '#4f8cff', red: '#f55454', purple: '#9b5cff', green: '#42d77d' }; return map[key] || '#4f8cff'; }
+
+// --- Images des QG (remplacement visuel) ---
+const HQ_IMAGE_PATHS = {
+  blue: 'images/QG-bleu.PNG',
+  red: 'images/QG-rouge.PNG',
+  purple: 'images/QG-violet.PNG',
+  green: 'images/QG-vert.PNG',
+};
+const HQ_IMAGES = {};
+function preloadHQImages() {
+  for (const [key, path] of Object.entries(HQ_IMAGE_PATHS)) {
+    const img = new Image();
+    img.onload = () => { const canvas = q('#game'); if (canvas) drawScene(canvas); };
+    img.src = path;
+    HQ_IMAGES[key] = img;
+  }
+}
 
 function togglePause() {
   state.isPaused = !state.isPaused;
@@ -1278,26 +1301,26 @@ function computeHQs(numPlayers) {
   for (let i = 0; i < pick.length; i++) {
     const target = cands[pick[i]];
     const near = findOpenCenterNear(target.x, target.y, minSep, result);
-    ensureOpen3x3(near.x, near.y);
+    ensureOpenHQArea(near.x, near.y);
     result.push({ cx: near.x, cy: near.y, colorKey: state.playerColors[i] });
   }
   return result;
 }
 
 function findOpenCenterNear(tx, ty, minSeparation, placed) {
-  // Cherche un centre de 3x3 au sol proche du point cible, en respectant une séparation minimale
+  // Cherche un centre de HQ_SIZE_TILES x HQ_SIZE_TILES au sol proche du point cible, en respectant une séparation minimale
   const maxR = Math.floor(Math.max(state.cols, state.rows) / 4);
   for (let r = 0; r <= maxR; r++) {
     for (let y = Math.max(1, ty - r); y <= Math.min(state.rows - 2, ty + r); y++) {
       const xs = [Math.max(1, tx - r), Math.min(state.cols - 2, tx + r)];
       for (const x of xs) {
-        if (isClear3x3(x, y) && farFromOthers(x, y, placed, minSeparation)) return { x, y };
+        if (isClearHQArea(x, y) && farFromOthers(x, y, placed, minSeparation)) return { x, y };
       }
     }
     for (let x = Math.max(1, tx - r); x <= Math.min(state.cols - 2, tx + r); x++) {
       const ys = [Math.max(1, ty - r), Math.min(state.rows - 2, ty + r)];
       for (const y of ys) {
-        if (isClear3x3(x, y) && farFromOthers(x, y, placed, minSeparation)) return { x, y };
+        if (isClearHQArea(x, y) && farFromOthers(x, y, placed, minSeparation)) return { x, y };
       }
     }
   }
@@ -1305,9 +1328,9 @@ function findOpenCenterNear(tx, ty, minSeparation, placed) {
   return { x: Math.min(state.cols - 2, Math.max(1, tx)), y: Math.min(state.rows - 2, Math.max(1, ty)) };
 }
 
-function isClear3x3(cx, cy) {
-  for (let y = cy - 1; y <= cy + 1; y++) {
-    for (let x = cx - 1; x <= cx + 1; x++) {
+function isClearHQArea(cx, cy) {
+  for (let y = cy - HQ_HALF_SPAN; y <= cy + HQ_HALF_SPAN; y++) {
+    for (let x = cx - HQ_HALF_SPAN; x <= cx + HQ_HALF_SPAN; x++) {
       if (y <= 0 || y >= state.rows - 1 || x <= 0 || x >= state.cols - 1) return false;
       if (state.tiles[y][x]) return false;
     }
@@ -1315,9 +1338,9 @@ function isClear3x3(cx, cy) {
   return true;
 }
 
-function ensureOpen3x3(cx, cy) {
-  for (let y = cy - 1; y <= cy + 1; y++) {
-    for (let x = cx - 1; x <= cx + 1; x++) {
+function ensureOpenHQArea(cx, cy) {
+  for (let y = cy - HQ_HALF_SPAN; y <= cy + HQ_HALF_SPAN; y++) {
+    for (let x = cx - HQ_HALF_SPAN; x <= cx + HQ_HALF_SPAN; x++) {
       if (y > 0 && y < state.rows - 1 && x > 0 && x < state.cols - 1) state.tiles[y][x] = false;
     }
   }
@@ -1334,28 +1357,22 @@ function farFromOthers(cx, cy, list, minSep) {
 function drawHQ(ctx, hq, tile, ox, oy) {
   const cx = ox + (hq.cx + 0.5) * tile;
   const cy = oy + (hq.cy + 0.5) * tile;
-  const radius = tile * 1.5; // ~3x3 cases
+  const size = tile * HQ_SIZE_TILES; // couvre le HQ_SIZE_TILES x HQ_SIZE_TILES
+  const img = HQ_IMAGES[hq.colorKey];
+
+  if (img && img.complete && img.naturalWidth > 0) {
+    ctx.save();
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(img, cx - size / 2, cy - size / 2, size, size);
+    ctx.restore();
+    return;
+  }
+
+  // Fallback minimal si l'image n'est pas prête: disque couleur à la taille du QG
+  const radius = tile * (HQ_SIZE_TILES / 2);
   const palette = { blue: '#4f8cff', red: '#f55454', purple: '#9b5cff', green: '#42d77d' };
   const base = palette[hq.colorKey] || '#4f8cff';
-
   ctx.save();
-  // lueur externe au sol (sous le QG), dégradé radial couleur joueur
-  (function drawOuterGlow() {
-    const rgb = hexToRgb(base);
-    ctx.save();
-    ctx.globalCompositeOperation = 'lighter';
-    const rOuter = radius * 3.0;
-    const gradGlow = ctx.createRadialGradient(cx, cy, radius * 0.2, cx, cy, rOuter);
-    gradGlow.addColorStop(0, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.18)`);
-    gradGlow.addColorStop(0.6, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.08)`);
-    gradGlow.addColorStop(1, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0)`);
-    ctx.fillStyle = gradGlow;
-    ctx.beginPath();
-    ctx.arc(cx, cy, rOuter, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-  })();
-  // disque externe dégradé
   const grad = ctx.createRadialGradient(cx, cy, radius * 0.2, cx, cy, radius);
   grad.addColorStop(0, lighten(base, 0.25));
   grad.addColorStop(1, shade(base, 0.65));
@@ -1363,30 +1380,6 @@ function drawHQ(ctx, hq, tile, ox, oy) {
   ctx.beginPath();
   ctx.arc(cx, cy, radius, 0, Math.PI * 2);
   ctx.fill();
-
-  // anneau interne
-  ctx.lineWidth = Math.max(2, Math.floor(tile * 0.15));
-  ctx.strokeStyle = shade(base, 0.45);
-  ctx.beginPath();
-  ctx.arc(cx, cy, radius * 0.72, 0, Math.PI * 2);
-  ctx.stroke();
-
-  // noyau
-  ctx.fillStyle = shade(base, 0.2);
-  ctx.beginPath();
-  ctx.arc(cx, cy, radius * 0.35, 0, Math.PI * 2);
-  ctx.fill();
-
-  // ombre portée douce vers la droite-bas
-  ctx.save();
-  ctx.globalAlpha = 0.22;
-  ctx.filter = 'blur(4px)';
-  ctx.fillStyle = 'rgba(0,0,0,0.6)';
-  ctx.beginPath();
-  ctx.arc(cx + radius * 0.25, cy + radius * 0.25, radius * 0.9, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
-
   ctx.restore();
 }
 
@@ -1520,7 +1513,7 @@ document.addEventListener('click', (e) => {
   // Vérifie clic sur un QG du joueur actif
   const activeKey = state.playerColors[state.currentPlayerIndex];
   const myHq = state.hqs.find(h => h.colorKey === activeKey);
-  if (myHq && Math.abs(gx - myHq.cx) <= 1 && Math.abs(gy - myHq.cy) <= 1) {
+  if (myHq && Math.abs(gx - myHq.cx) <= HQ_HALF_SPAN && Math.abs(gy - myHq.cy) <= HQ_HALF_SPAN) {
     // toggle panel
     panel.classList.toggle('visible');
     // recolor toutes les icônes selon le joueur actif
@@ -1553,9 +1546,9 @@ function spawnUnit() {
   const activeKey = state.playerColors[state.currentPlayerIndex];
   const hq = state.hqs.find(h => h.colorKey === activeKey);
   if (!hq) return;
-  // Cherche la case libre la plus proche AUTOUR du 3x3 du QG (infranchissable)
+  // Cherche la case libre la plus proche AUTOUR du QG (infranchissable)
   let spot = null;
-  for (let r = 2; r <= 5 && !spot; r++) {
+  for (let r = HQ_HALF_SPAN + 1; r <= HQ_HALF_SPAN + 4 && !spot; r++) {
     for (let dy = -r; dy <= r && !spot; dy++) {
       for (let dx = -r; dx <= r; dx++) {
         if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue; // anneau
@@ -1580,8 +1573,8 @@ function spawnUnit() {
 
 function spawnInitialUnitsAtHQ(hq, ownerIndex, count) {
   const candidates = [];
-  for (let dy = -2; dy <= 2; dy++) {
-    for (let dx = -2; dx <= 2; dx++) {
+  for (let dy = -(HQ_HALF_SPAN + 2); dy <= (HQ_HALF_SPAN + 2); dy++) {
+    for (let dx = -(HQ_HALF_SPAN + 2); dx <= (HQ_HALF_SPAN + 2); dx++) {
       const x = hq.cx + dx, y = hq.cy + dy;
       if (!isInBounds(x, y)) continue;
       if (isHQCell(x, y)) continue;
@@ -1769,24 +1762,24 @@ function drawStarSymbol(ctx, cx, cy, r, hp) {
   ctx.restore();
 }
 
-// Les 9 cases du QG sont infranchissables
+// Les cases du QG (HQ_SIZE_TILES x HQ_SIZE_TILES) sont infranchissables
 function isHQCell(x, y) {
   if (!state.hqs) return false;
   for (const h of state.hqs) {
-    if (Math.abs(x - h.cx) <= 1 && Math.abs(y - h.cy) <= 1) return true;
+    if (Math.abs(x - h.cx) <= HQ_HALF_SPAN && Math.abs(y - h.cy) <= HQ_HALF_SPAN) return true;
   }
   return false;
 }
 
 function isAtHQPerimeter(x, y, hq) {
-  // Arrêt dans un carré ~6x6 (on élargit à Chebyshev <= 3 pour plus de tolérance)
-  return Math.abs(x - hq.cx) <= 3 && Math.abs(y - hq.cy) <= 3;
+  // Arrêt dans un carré proportionnel à la taille du QG: Chebyshev <= HQ_PERIM_RADIUS
+  return Math.abs(x - hq.cx) <= HQ_PERIM_RADIUS && Math.abs(y - hq.cy) <= HQ_PERIM_RADIUS;
 }
 
 function isBlocked(x, y) {
   if (!isInBounds(x, y)) return true;
   if (state.tiles && state.tiles[y][x]) return true; // mur
-  if (isHQCell(x, y)) return true; // QG 3x3
+  if (isHQCell(x, y)) return true; // QG zone
   return false;
 }
 
