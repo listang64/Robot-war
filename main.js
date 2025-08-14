@@ -27,7 +27,9 @@ const state = {
   animRafId: null,
   simRafId: null,
   // Cartographie partagée par joueur
-  playerMaps: [], // index -> { knownWalls:Set<string>, knownFree:Set<string>, visitCounts:Map<string,number> }
+  playerMaps: [],
+  // Sélection de modules pour la création d'unités
+  selectedModules: { movement: 0 }, // index -> { knownWalls:Set<string>, knownFree:Set<string>, visitCounts:Map<string,number> }
   nextUnitId: 1,
   nextLocalIdByPlayer: [],
   lastSimTime: 0,
@@ -268,6 +270,23 @@ function renderGame() {
     // ne ferme pas l'overlay
   });
   devList.append(addEnergyBtn);
+  // --- Bouton: Endommager modules unité ---
+  const damageModuleBtn = el('button', { className: 'dev-damage-module', title: 'Endommager modules d\'une unité' });
+  damageModuleBtn.textContent = 'Dmg Modules';
+  damageModuleBtn.addEventListener('click', () => {
+    // Trouve la première unité du joueur actuel qui a des modules
+    const key = state.playerColors[state.currentPlayerIndex];
+    const playerUnits = state.units.filter(u => u.ownerIndex === state.currentPlayerIndex && u.modules && u.modules.length > 0);
+    if (playerUnits.length > 0) {
+      const unit = playerUnits[0];
+      // Endommage le premier module de 25 HP
+      if (unit.modules[0]) {
+        unit.modules[0].hp = Math.max(0, unit.modules[0].hp - 25);
+      }
+      const canvas = q('#game'); if (canvas) drawScene(canvas);
+    }
+  });
+  devList.append(damageModuleBtn);
   const closeBtn = el('button', { className: 'dev-close', title: 'Fermer' });
   closeBtn.textContent = 'X';
   closeBtn.addEventListener('click', () => { const ov = q('#devOverlay'); if (ov) ov.classList.remove('visible'); devSpawnSelection = null; });
@@ -439,6 +458,10 @@ function nextPlayer() {
   if (spawnPanelEl) spawnPanelEl.classList.remove('visible');
   programBuffer = '';
   updateProgDisplay();
+  // Remet à zéro les compteurs de modules pour le nouveau joueur
+  state.selectedModules.movement = 0;
+  updateModuleDisplay();
+  updateEnergyCost();
   // Met à jour la couleur du bouton de programmation
   const progBtn = q('#programBtn');
   if (progBtn) progBtn.style.setProperty('--progColor', getPlayerColor(state.currentPlayerIndex));
@@ -1795,18 +1818,124 @@ function renderSpawnPanel() {
   header.append(title, hpLabel, hpLine, energyLabel, energyLine);
   panel.append(header);
 
+  // Titre au dessus de tout (même au dessus de la box)
+  const mainTitle = el('div', { 
+    textContent: 'Créer ton robot', 
+    style: 'text-align:center;color:#cfd6e6;font-size:16px;font-weight:600;margin-bottom:12px;position:relative;z-index:10;' 
+  });
+  
   const list = el('div', { className: 'unit-list' });
   const card = el('div', { className: 'unit-card' });
-  const icon = el('canvas', { width: 48, height: 48, id: 'spawnCreateIcon' });
-  const colorForSpawn = getPlayerColor(state.currentPlayerIndex);
-  drawUnitIconWithId(icon.getContext('2d'), 48, colorForSpawn, '?');
+  
+  // LIGNE 1: Bouton Créer + Coût (centrés dans la box)
+  const line1 = el('div', { 
+    style: 'display:flex;align-items:center;justify-content:center;gap:12px;margin-bottom:16px;' 
+  });
   const btn = button('Créer', () => spawnUnit());
-  card.append(icon, btn);
+  btn.style.fontSize = '14px';
+  btn.style.padding = '8px 20px';
+  btn.style.borderRadius = '6px';
+  btn.style.border = '1px solid #178a57';
+  btn.style.background = 'linear-gradient(180deg, #2ec27e, #1f9e66)';
+  btn.style.color = '#0b0e14';
+  btn.style.fontWeight = '600';
+  btn.style.cursor = 'pointer';
+  
+  const energyCost = el('div', { 
+    id: 'energyCost',
+    textContent: '0 ⚡',
+    style: 'color:#ff4444;font-size:14px;font-weight:600;padding:8px 12px;background:rgba(255,68,68,0.1);border-radius:4px;border:1px solid rgba(255,68,68,0.3);' 
+  });
+  line1.append(btn, energyCost);
+  
+  // LIGNE 2: Sous-titre Modules
+  const line2 = el('div', { 
+    textContent: 'Modules', 
+    style: 'text-align:center;color:#cfd6e6;font-size:14px;font-weight:600;margin-bottom:12px;' 
+  });
+  
+  // LIGNE 3: Module Mouvement avec tout centré
+  const line3 = el('div', { 
+    style: 'display:flex;align-items:center;justify-content:center;gap:8px;flex-wrap:wrap;' 
+  });
+  
+  // Container pour Mouvement + coût
+  const movementLabelContainer = el('div', { 
+    style: 'display:flex;flex-direction:column;align-items:center;' 
+  });
+  const movementLabel = el('span', { 
+    textContent: 'Mouvement', 
+    style: 'font-size:13px;color:#cfd6e6;' 
+  });
+  const movementCost = el('span', { 
+    textContent: '50', 
+    style: 'color:#ffd54a;font-size:11px;font-weight:600;' 
+  });
+  movementLabelContainer.append(movementLabel, movementCost);
+  
+  const movementCount = el('div', { 
+    id: 'movementCount',
+    textContent: '0', 
+    style: 'background:#6b7280;color:#fff;border-radius:4px;padding:3px 8px;font-size:12px;min-width:24px;text-align:center;font-weight:600;' 
+  });
+  const movementMinus = el('button', { 
+    textContent: '−',
+    style: 'width:24px;height:24px;border-radius:4px;border:1px solid #4b5563;background:#374151;color:#fff;font-size:14px;font-weight:600;display:flex;align-items:center;justify-content:center;cursor:pointer;' 
+  });
+  const movementPlus = el('button', { 
+    textContent: '+',
+    style: 'width:24px;height:24px;border-radius:4px;border:1px solid #4b5563;background:#374151;color:#fff;font-size:14px;font-weight:600;display:flex;align-items:center;justify-content:center;cursor:pointer;' 
+  });
+  
+  line3.append(movementLabelContainer, movementCount, movementMinus, movementPlus);
+  
+  movementPlus.addEventListener('click', () => {
+    const total = getTotalModules();
+    if (total < 10) {
+      state.selectedModules.movement++;
+      updateModuleDisplay();
+      updateEnergyCost();
+    }
+  });
+  
+  movementMinus.addEventListener('click', () => {
+    if (state.selectedModules.movement > 0) {
+      state.selectedModules.movement--;
+      updateModuleDisplay();
+      updateEnergyCost();
+    }
+  });
+  
+  card.append(line1, line2, line3);
   list.append(card);
-  panel.append(list);
-  // init texte PV
+  panel.append(mainTitle, list);
+  // init texte PV et coût énergie
   updateHqHpLine();
+  updateEnergyCost();
   return panel;
+}
+
+function getTotalModules() {
+  return Object.values(state.selectedModules).reduce((sum, count) => sum + count, 0);
+}
+
+function updateModuleDisplay() {
+  const movementCount = q('#movementCount');
+  if (movementCount) {
+    movementCount.textContent = state.selectedModules.movement.toString();
+  }
+}
+
+function updateEnergyCost() {
+  const energyCost = q('#energyCost');
+  if (energyCost) {
+    const cost = calculateUnitCost();
+    energyCost.textContent = `${cost} ⚡`;
+  }
+}
+
+function calculateUnitCost() {
+  return state.selectedModules.movement * 50; // 50 énergie par module de mouvement
 }
 
 function updateHqHpLine() {
@@ -1823,10 +1952,8 @@ function updateHqHpLine() {
 }
 
 function updateSpawnCreateIconColor() {
-  const cv = q('#spawnCreateIcon');
-  if (!cv) return;
-  const ctx = cv.getContext('2d');
-  drawUnitIconWithId(ctx, cv.width, getPlayerColor(state.currentPlayerIndex), '?');
+  // L'icône n'existe plus dans la nouvelle interface
+  return;
 }
 
 function drawTriangleIcon(ctx, size, color) {
@@ -1969,11 +2096,39 @@ function recolorSpawnPanelIcons() {
 }
 
 function spawnUnit() {
+  console.log('spawnUnit appelée');
   const activeKey = state.playerColors[state.currentPlayerIndex];
   const hq = state.hqs.find(h => h.colorKey === activeKey);
-  if (!hq) return;
-  const created = spawnUnitFromHQ(hq, state.currentPlayerIndex);
-  if (!created) return;
+  console.log('HQ trouvé:', hq);
+  if (!hq) {
+    console.log('Pas de HQ trouvé!');
+    return;
+  }
+  
+  // Vérifier si on a assez d'énergie
+  const cost = calculateUnitCost();
+  console.log('Coût calculé:', cost, 'Énergie HQ:', hq.energy);
+  if (hq.energy < cost) {
+    console.log('Pas assez d\'énergie!');
+    return;
+  }
+  
+  const created = spawnUnitFromHQ(hq, state.currentPlayerIndex, 'player'); // Marquer comme création joueur
+  console.log('Unité créée:', created);
+  if (!created) {
+    console.log('Échec de création d\'unité');
+    return;
+  }
+  
+  // Déduire le coût en énergie du QG
+  hq.energy = Math.max(0, hq.energy - cost);
+  console.log('Nouvelle énergie HQ:', hq.energy);
+  
+  // Reset la sélection de modules après création
+  state.selectedModules.movement = 0;
+  updateModuleDisplay();
+  updateEnergyCost();
+  updateHqHpLine(); // Mettre à jour l'affichage de l'énergie du QG
   const panel = q('#spawnPanel'); if (panel) panel.classList.remove('visible');
   const canvas = q('#game'); if (canvas) drawScene(canvas);
 }
@@ -1988,19 +2143,41 @@ function spawnInitialUnitsAtHQ(hq, ownerIndex, count) {
 
 // Fait apparaître l'unité au centre du QG puis l'anime vers une sortie N/S/E/O
 function spawnUnitFromHQ(hq, ownerIndex, offsetIdx = 0) {
-  const spot = findHQExitSpot(hq, offsetIdx);
-  if (!spot) return false;
-  if (unitAt(spot.x, spot.y)) return false;
+  console.log('Recherche spot de sortie pour HQ:', hq.cx, hq.cy, 'offsetIdx:', offsetIdx);
+  // Pour les créations joueur, on utilise 0 comme attempt
+  const attempt = (offsetIdx === 'player') ? 0 : offsetIdx;
+  const spot = findHQExitSpot(hq, attempt);
+  console.log('Spot trouvé:', spot);
+  if (!spot) {
+    console.log('Aucun spot de sortie trouvé!');
+    return false;
+  }
+  if (unitAt(spot.x, spot.y)) {
+    console.log('Spot occupé par une unité!');
+    return false;
+  }
   const idNum = state.nextUnitId++;
   const now = performance.now();
   const tileDuration = 2160; // encore 2x plus lent (au total 6x)
   const headingAng = Math.atan2(spot.y - hq.cy, spot.x - hq.cx);
+  // Création des modules basée sur la sélection (ou valeurs par défaut pour les unités initiales)
+  const modules = [];
+  if (offsetIdx === 'player') { // Création par le joueur via l'interface
+    // Ajouter les modules sélectionnés
+    for (let i = 0; i < state.selectedModules.movement; i++) {
+      modules.push({ type: 'movement', hp: 100, maxHp: 100 });
+    }
+  } else { // Unités initiales (spawn automatique au début)
+    // Une unité initiale basique sans module
+  }
+  
   const unit = {
     id: idNum,
     ownerIndex,
     x: spot.x,
     y: spot.y,
     hp: 1,
+    modules: modules,
     recentTrail: [],
     lastDir: null,
     anim: { fromX: hq.cx, fromY: hq.cy, toX: spot.x, toY: spot.y, startTime: now, endTime: now + tileDuration },
@@ -2017,21 +2194,41 @@ function spawnUnitFromHQ(hq, ownerIndex, offsetIdx = 0) {
 
 // Cherche une case de sortie juste à l'extérieur du QG, en privilégiant N/E/S/O
 function findHQExitSpot(hq, attempt = 0) {
+  console.log('findHQExitSpot: HQ_BLOCK_HALF_SPAN =', HQ_BLOCK_HALF_SPAN, 'attempt =', attempt);
   const directions = [ [0,-1], [1,0], [0,1], [-1,0] ]; // N,E,S,O
   const startRadius = HQ_BLOCK_HALF_SPAN + 1;
   const extra = Math.min(6, attempt); // éloigne un peu pour spawns multiples
+  console.log('startRadius =', startRadius, 'extra =', extra);
+  
   for (const [dx, dy] of directions) {
+    console.log('Testant direction:', dx, dy);
     for (let r = startRadius; r <= startRadius + 3 + extra; r++) {
       const x = hq.cx + dx * r;
       const y = hq.cy + dy * r;
-      if (!isInBounds(x, y)) continue;
-      if (isBlocked(x, y)) continue;
-      if (unitAt(x, y)) continue;
+      console.log('  Test position:', x, y, 'radius:', r);
+      
+      if (!isInBounds(x, y)) {
+        console.log('    Hors limites');
+        continue;
+      }
+      if (isBlocked(x, y)) {
+        console.log('    Bloqué');
+        continue;
+      }
+      if (unitAt(x, y)) {
+        console.log('    Unité présente');
+        continue;
+      }
       // Vérifie qu'aucune unité ne se trouve devant sur la trajectoire
-      if (!isExitPathClear(hq, dx, dy, r)) continue;
+      if (!isExitPathClear(hq, dx, dy, r)) {
+        console.log('    Chemin non dégagé');
+        continue;
+      }
+      console.log('  SPOT VALIDE TROUVÉ:', x, y);
       return { x, y };
     }
   }
+  console.log('Aucun spot valide trouvé dans toutes les directions');
   return null;
 }
 
@@ -2066,12 +2263,8 @@ function drawUnit(ctx, u, tile, ox, oy) {
   ctx.beginPath();
   ctx.arc(cx, cy, innerR, 0, Math.PI * 2);
   ctx.fill();
-  // anneau épais pour futur jauges (couleur fixe)
-  ctx.lineWidth = ringW;
-  ctx.strokeStyle = '#222222';
-  ctx.beginPath();
-  ctx.arc(cx, cy, r, 0, Math.PI * 2);
-  ctx.stroke();
+  // Anneau découpé en 10 tronçons pour les modules
+  drawModuleRing(ctx, u, cx, cy, r, ringW);
   // ID centré (ID global unique)
   ctx.fillStyle = color;
   ctx.font = `${Math.floor(tile * 0.6)}px ui-monospace, monospace`;
@@ -2102,6 +2295,90 @@ function drawUnit(ctx, u, tile, ox, oy) {
   ctx.lineTo(hx, hy);
   ctx.stroke();
   ctx.restore();
+}
+
+function drawModuleRing(ctx, u, cx, cy, r, ringW) {
+  const modules = u.modules || [];
+  const totalSlots = 10;
+  const slotAngle = (Math.PI * 2) / totalSlots;
+  const innerRadius = Math.max(1, r - ringW * 0.5); // Éviter les radius négatifs
+  const outerRadius = Math.max(innerRadius + 1, r + ringW * 0.5);
+  
+  // Dessiner chaque tronçon
+  for (let i = 0; i < totalSlots; i++) {
+    const startAngle = i * slotAngle - Math.PI / 2; // Commence en haut (12h)
+    const endAngle = (i + 1) * slotAngle - Math.PI / 2;
+    
+    // Vérifier s'il y a un module dans ce slot
+    const module = modules[i];
+    
+    if (module) {
+      // Couleur basée sur le type de module
+      let moduleColor = '#6b7280'; // Gris clair pour mouvement par défaut
+      switch (module.type) {
+        case 'movement':
+          moduleColor = '#6b7280'; // Gris clair pour mouvement
+          break;
+        default:
+          moduleColor = '#6b7280';
+      }
+      
+      // Calculer le ratio de santé pour la jauge
+      const healthRatio = Math.max(0, Math.min(1, module.hp / module.maxHp));
+      
+      // Dessiner d'abord le fond (module endommagé/vide)
+      ctx.save();
+      ctx.fillStyle = '#2a2a2a'; // Fond sombre
+      ctx.beginPath();
+      ctx.arc(cx, cy, outerRadius, startAngle, endAngle);
+      ctx.arc(cx, cy, innerRadius, endAngle, startAngle, true);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+      
+      // Dessiner la jauge de santé (portion restante)
+      if (healthRatio > 0) {
+        const healthAngle = startAngle + (endAngle - startAngle) * healthRatio;
+        ctx.save();
+        ctx.fillStyle = moduleColor;
+        ctx.beginPath();
+        ctx.arc(cx, cy, outerRadius, startAngle, healthAngle);
+        ctx.arc(cx, cy, innerRadius, healthAngle, startAngle, true);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+      }
+    } else {
+      // Slot vide
+      ctx.save();
+      ctx.fillStyle = '#222222'; // Couleur par défaut (vide)
+      ctx.beginPath();
+      ctx.arc(cx, cy, outerRadius, startAngle, endAngle);
+      ctx.arc(cx, cy, innerRadius, endAngle, startAngle, true);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+    
+    // Bordure entre les tronçons
+    ctx.save();
+    ctx.strokeStyle = '#0e0e0e';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(cx, cy, outerRadius, startAngle, endAngle);
+    ctx.arc(cx, cy, innerRadius, endAngle, startAngle, true);
+    ctx.closePath();
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+function interpolateColor(color1, color2, ratio) {
+  // Simple interpolation de couleur (approximation rapide)
+  if (ratio <= 0) return color1;
+  if (ratio >= 1) return color2;
+  // Pour cette première version, on retourne juste color2 si ratio > 0.5, sinon color1
+  return ratio > 0.5 ? color2 : color1;
 }
 
 function drawUnitIconWithId(ctx, size, color, idText) {
