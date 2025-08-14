@@ -29,7 +29,7 @@ const state = {
   // Cartographie partagée par joueur
   playerMaps: [],
   // Sélection de modules pour la création d'unités
-  selectedModules: { movement: 0 }, // index -> { knownWalls:Set<string>, knownFree:Set<string>, visitCounts:Map<string,number> }
+  selectedModules: { movement: 0, armor: 0 }, // index -> { knownWalls:Set<string>, knownFree:Set<string>, visitCounts:Map<string,number> }
   nextUnitId: 1,
   nextLocalIdByPlayer: [],
   lastSimTime: 0,
@@ -261,18 +261,37 @@ function renderGame() {
   });
   devList.append(addEnergyBtn);
   // --- Bouton: Endommager modules unité ---
-  const damageModuleBtn = el('button', { className: 'dev-damage-module', title: 'Endommager modules d\'une unité' });
+  const damageModuleBtn = el('button', { className: 'dev-damage-module', title: 'Endommager modules de la dernière unité créée' });
   damageModuleBtn.textContent = 'Dmg Modules';
   damageModuleBtn.addEventListener('click', () => {
-    // Trouve la première unité du joueur actuel qui a des modules
-    const key = state.playerColors[state.currentPlayerIndex];
-    const playerUnits = state.units.filter(u => u.ownerIndex === state.currentPlayerIndex && u.modules && u.modules.length > 0);
-    if (playerUnits.length > 0) {
-      const unit = playerUnits[0];
-      // Endommage le premier module de 25 HP
-      if (unit.modules[0]) {
-        unit.modules[0].hp = Math.max(0, unit.modules[0].hp - 25);
+    // Trouve la dernière unité créée (ID le plus élevé) qui a des modules
+    const unitsWithModules = state.units.filter(u => u.modules && u.modules.length > 0);
+    if (unitsWithModules.length === 0) return;
+    
+    // Trier par ID décroissant pour avoir la dernière créée en premier
+    unitsWithModules.sort((a, b) => b.id - a.id);
+    const lastUnit = unitsWithModules[0];
+    
+    // Trouver le premier module fonctionnel (HP > 0) dans l'ordre des slots
+    let targetModule = null;
+    for (let i = 0; i < lastUnit.modules.length; i++) {
+      if (lastUnit.modules[i].hp > 0) {
+        targetModule = lastUnit.modules[i];
+        break;
       }
+    }
+    
+    if (targetModule) {
+      // Endommager le module de 25 HP
+      targetModule.hp = Math.max(0, targetModule.hp - 25);
+      console.log(`Module ${targetModule.type} de l'unité ${lastUnit.id} endommagé: ${targetModule.hp}/100 HP`);
+      
+      // Vérifier si l'unité n'a plus aucun module fonctionnel
+      const hasWorkingModules = lastUnit.modules.some(m => m.hp > 0);
+      if (!hasWorkingModules) {
+        console.log(`Unité ${lastUnit.id} détruite (plus de modules fonctionnels)`);
+      }
+      
       const canvas = q('#game'); if (canvas) drawScene(canvas);
     }
   });
@@ -450,6 +469,7 @@ function nextPlayer() {
   updateProgDisplay();
   // Remet à zéro les compteurs de modules pour le nouveau joueur
   state.selectedModules.movement = 0;
+  state.selectedModules.armor = 0;
   updateModuleDisplay();
   updateEnergyCost();
   // Met à jour la couleur du bouton de programmation
@@ -678,6 +698,32 @@ function startSimulationLoop() {
 
 function stepSimulation(dt = 0) {
   if (state.isPaused || !state.tiles || !state.units.length) return;
+  
+  // Supprimer les unités qui n'ont plus aucun module fonctionnel
+  const unitsToRemove = [];
+  for (let i = 0; i < state.units.length; i++) {
+    const u = state.units[i];
+    if (!hasAnyWorkingModule(u)) {
+      unitsToRemove.push(i);
+    }
+  }
+  
+  // Supprimer les unités en partant de la fin pour ne pas décaler les indices
+  for (let i = unitsToRemove.length - 1; i >= 0; i--) {
+    const unitIndex = unitsToRemove[i];
+    const removedUnit = state.units[unitIndex];
+    console.log(`Unité ${removedUnit.id} supprimée (plus de modules fonctionnels)`);
+    state.units.splice(unitIndex, 1);
+    // Nettoyer aussi ses programmes
+    delete state.programs[String(removedUnit.id)];
+  }
+  
+  // Redessiner la scène si des unités ont été supprimées
+  if (unitsToRemove.length > 0) {
+    const canvas = q('#game'); 
+    if (canvas) drawScene(canvas);
+  }
+  
   let moved = false;
   for (const u of state.units) {
     // ignore les unités déjà en animation
@@ -697,7 +743,9 @@ function stepSimulation(dt = 0) {
         const stepTo = planStepToHQUsingSharedMap(u, myHq);
         if (stepTo) {
           const now = performance.now();
-          const tileDuration = Math.max(120, Math.floor(1000 / state.unitSpeedTilesPerSec));
+          const speedModifier = getSpeedModifier(u);
+          const baseDuration = Math.max(120, Math.floor(1000 / state.unitSpeedTilesPerSec));
+          const tileDuration = speedModifier > 0 ? Math.floor(baseDuration / speedModifier) : baseDuration * 10;
           u.anim = { fromX: u.x, fromY: u.y, toX: stepTo.x, toY: stepTo.y, startTime: now, endTime: now + tileDuration };
           const ang = Math.atan2(stepTo.y - u.y, stepTo.x - u.x);
           u.headingFrom = (u.headingTo ?? ang);
@@ -712,7 +760,9 @@ function stepSimulation(dt = 0) {
         const bridge = planStepBridgeToKnownThenHQ(u, myHq);
         if (bridge) {
           const now2 = performance.now();
-          const td = Math.max(120, Math.floor(1000 / state.unitSpeedTilesPerSec));
+          const speedModifier = getSpeedModifier(u);
+          const baseTd = Math.max(120, Math.floor(1000 / state.unitSpeedTilesPerSec));
+          const td = speedModifier > 0 ? Math.floor(baseTd / speedModifier) : baseTd * 10;
           u.anim = { fromX: u.x, fromY: u.y, toX: bridge.x, toY: bridge.y, startTime: now2, endTime: now2 + td };
           const ang2 = Math.atan2(bridge.y - u.y, bridge.x - u.x);
           u.headingFrom = (u.headingTo ?? ang2);
@@ -779,7 +829,9 @@ function stepSimulation(dt = 0) {
         const ny = u.y + step[1];
         const now = performance.now();
         // calcule une durée basée sur la vitesse pour glisser entre les cases
-        const tileDuration = Math.max(120, Math.floor(1000 / state.unitSpeedTilesPerSec));
+        const speedModifier = getSpeedModifier(u);
+        const baseDuration = Math.max(120, Math.floor(1000 / state.unitSpeedTilesPerSec));
+        const tileDuration = speedModifier > 0 ? Math.floor(baseDuration / speedModifier) : baseDuration * 10;
         u.anim = { fromX: u.x, fromY: u.y, toX: nx, toY: ny, startTime: now, endTime: now + tileDuration };
         // heading vers la nouvelle direction
         const ang = Math.atan2(ny - u.y, nx - u.x);
@@ -884,11 +936,14 @@ function moveTowardOrExploreInline(u, tx, ty) {
   const nx = u.x + step[0];
   const ny = u.y + step[1];
   const now = performance.now();
-  u.anim = { fromX: u.x, fromY: u.y, toX: nx, toY: ny, startTime: now, endTime: now + 240 };
+  const speedModifier = getSpeedModifier(u);
+  const baseDuration = 240;
+  const duration = speedModifier > 0 ? Math.floor(baseDuration / speedModifier) : baseDuration * 10;
+  u.anim = { fromX: u.x, fromY: u.y, toX: nx, toY: ny, startTime: now, endTime: now + duration };
   const ang = Math.atan2(ny - u.y, nx - u.x);
   u.headingFrom = (u.headingTo ?? ang);
   u.headingTo = ang;
-  u.headingStart = now; u.headingEnd = now + 240;
+  u.headingStart = now; u.headingEnd = now + duration;
   updateRecentTrail(u, u.x, u.y);
   u.x = nx; u.y = ny; u.lastDir = step; if (u.knownFree) u.knownFree.add(`${u.x},${u.y}`);
   return true;
@@ -1855,14 +1910,14 @@ function renderSpawnPanel() {
   createLine.append(btn, energyCost);
   creationBox.append(createLine);
   
-  // Titre Modules (au-dessus de la box)
+  // Titre Modules (au-dessus des boxes)
   const moduleTitle = el('div', { 
     textContent: 'Modules', 
     style: 'text-align:center;color:#cfd6e6;font-size:14px;font-weight:600;margin:12px 0 8px 0;' 
   });
   
-  // BOX 2: Modules
-  const moduleBox = el('div', { className: 'unit-card' });
+  // BOX 2: Module Mouvement
+  const movementBox = el('div', { className: 'unit-card', style: 'margin-bottom:8px;' });
   
   // Module Mouvement avec tout aligné horizontalement
   const moduleLine = el('div', { 
@@ -1903,7 +1958,6 @@ function renderSpawnPanel() {
   });
   
   controlsContainer.append(movementCount, movementMinus, movementPlus);
-  
   moduleLine.append(movementLabelContainer, controlsContainer);
   
   movementPlus.addEventListener('click', () => {
@@ -1923,10 +1977,73 @@ function renderSpawnPanel() {
     }
   });
   
-  moduleBox.append(moduleLine);
+  movementBox.append(moduleLine);
+  
+  // BOX 3: Module Armure
+  const armorBox = el('div', { className: 'unit-card' });
+  
+  const armorLine = el('div', { 
+    style: 'display:flex;align-items:center;justify-content:space-between;padding:14px 20px;gap:16px;' 
+  });
+  
+  // Container pour Armure + coût (à gauche)
+  const armorLabelContainer = el('div', { 
+    style: 'display:flex;flex-direction:column;align-items:center;' 
+  });
+  const armorLabel = el('span', { 
+    textContent: 'Armure', 
+    style: 'font-size:15px;color:#cfd6e6;margin-bottom:4px;font-weight:600;' 
+  });
+  const armorCost = el('span', { 
+    textContent: '75', 
+    style: 'color:#ffd54a;font-size:14px;font-weight:800;' 
+  });
+  armorLabelContainer.append(armorLabel, armorCost);
+  
+  // Container pour les contrôles (à droite)
+  const armorControlsContainer = el('div', { 
+    style: 'display:flex;align-items:center;gap:6px;' 
+  });
+  
+  const armorCount = el('div', { 
+    id: 'armorCount',
+    textContent: '0', 
+    style: 'background:#6b7280;color:#fff;border-radius:4px;padding:3px 6px;font-size:11px;min-width:20px;text-align:center;font-weight:600;' 
+  });
+  const armorMinus = el('button', { 
+    textContent: '−',
+    style: 'width:20px;height:20px;border-radius:4px;border:1px solid #4b5563;background:#374151;color:#fff;font-size:12px;font-weight:600;display:flex;align-items:center;justify-content:center;cursor:pointer;' 
+  });
+  const armorPlus = el('button', { 
+    textContent: '+',
+    style: 'width:20px;height:20px;border-radius:4px;border:1px solid #4b5563;background:#374151;color:#fff;font-size:12px;font-weight:600;display:flex;align-items:center;justify-content:center;cursor:pointer;' 
+  });
+  
+  armorControlsContainer.append(armorCount, armorMinus, armorPlus);
+  armorLine.append(armorLabelContainer, armorControlsContainer);
+  
+  // Event listeners pour Armure
+  armorPlus.addEventListener('click', () => {
+    const total = getTotalModules();
+    if (total < 10) {
+      state.selectedModules.armor++;
+      updateModuleDisplay();
+      updateEnergyCost();
+    }
+  });
+  
+  armorMinus.addEventListener('click', () => {
+    if (state.selectedModules.armor > 0) {
+      state.selectedModules.armor--;
+      updateModuleDisplay();
+      updateEnergyCost();
+    }
+  });
+
+  armorBox.append(armorLine);
   
   const list = el('div', { className: 'unit-list' });
-  list.append(creationBox, moduleTitle, moduleBox);
+  list.append(creationBox, moduleTitle, movementBox, armorBox);
   panel.append(separator, mainTitle, list);
   // init texte PV et coût énergie
   updateHqHpLine();
@@ -1945,10 +2062,44 @@ function hasWorkingMovementModule(unit) {
   return unit.modules.some(module => module.type === 'movement' && module.hp > 0);
 }
 
+// Vérifie si une unité a au moins un module fonctionnel (tous types confondus)
+function hasAnyWorkingModule(unit) {
+  if (!unit.modules || unit.modules.length === 0) return false;
+  return unit.modules.some(module => module.hp > 0);
+}
+
+// Calcule le modificateur de vitesse basé sur le ratio modules de mouvement / autres modules
+function getSpeedModifier(unit) {
+  if (!unit.modules || unit.modules.length === 0) return 1.0;
+  
+  const workingModules = unit.modules.filter(module => module.hp > 0);
+  const movementModules = workingModules.filter(module => module.type === 'movement').length;
+  const otherModules = workingModules.filter(module => module.type !== 'movement').length;
+  
+  // Si pas de modules de mouvement fonctionnels, pas de mouvement
+  if (movementModules === 0) return 0;
+  
+  // Si pas d'autres modules, vitesse normale
+  if (otherModules === 0) return 1.0;
+  
+  // Calcul du ratio: mouvement / autres
+  const ratio = movementModules / otherModules;
+  
+  // Si ratio >= 1 (autant ou plus de mouvement que d'autres), vitesse normale
+  if (ratio >= 1.0) return 1.0;
+  
+  // Si ratio < 1 (moins de mouvement que d'autres), ralentissement proportionnel
+  return ratio;
+}
+
 function updateModuleDisplay() {
   const movementCount = q('#movementCount');
   if (movementCount) {
     movementCount.textContent = state.selectedModules.movement.toString();
+  }
+  const armorCount = q('#armorCount');
+  if (armorCount) {
+    armorCount.textContent = state.selectedModules.armor.toString();
   }
 }
 
@@ -1991,7 +2142,7 @@ function updateCreateButtonState() {
 }
 
 function calculateUnitCost() {
-  return state.selectedModules.movement * 50; // 50 énergie par module de mouvement
+  return state.selectedModules.movement * 50 + state.selectedModules.armor * 75; // 50 énergie par module de mouvement, 75 par module d'armure
 }
 
 function updateHqHpLine() {
@@ -2190,6 +2341,7 @@ function spawnUnit() {
   
   // Reset la sélection de modules après création
   state.selectedModules.movement = 0;
+  state.selectedModules.armor = 0;
   updateModuleDisplay();
   updateEnergyCost();
   updateHqHpLine(); // Mettre à jour l'affichage de l'énergie du QG
@@ -2227,14 +2379,17 @@ function spawnUnitFromHQ(hq, ownerIndex, offsetIdx = 0) {
   const headingAng = Math.atan2(spot.y - hq.cy, spot.x - hq.cx);
   // Création des modules basée sur la sélection (ou valeurs par défaut pour les unités initiales)
   const modules = [];
-  if (offsetIdx === 'player') { // Création par le joueur via l'interface
-    // Ajouter les modules sélectionnés
-    for (let i = 0; i < state.selectedModules.movement; i++) {
-      modules.push({ type: 'movement', hp: 100, maxHp: 100 });
-    }
-  } else { // Unités initiales (spawn automatique au début)
-    // Une unité initiale basique sans module
-  }
+        if (offsetIdx === 'player') { // Création par le joueur via l'interface
+        // Ajouter les modules sélectionnés
+        for (let i = 0; i < state.selectedModules.movement; i++) {
+          modules.push({ type: 'movement', hp: 100, maxHp: 100 });
+        }
+        for (let i = 0; i < state.selectedModules.armor; i++) {
+          modules.push({ type: 'armor', hp: 100, maxHp: 100 });
+        }
+      } else { // Unités initiales (spawn automatique au début)
+        // Une unité initiale basique sans module
+      }
   
   const unit = {
     id: idNum,
@@ -2377,16 +2532,19 @@ function drawModuleRing(ctx, u, cx, cy, r, ringW) {
     // Vérifier s'il y a un module dans ce slot
     const module = modules[i];
     
-    if (module) {
-      // Couleur basée sur le type de module
-      let moduleColor = '#6b7280'; // Gris clair pour mouvement par défaut
-      switch (module.type) {
-        case 'movement':
-          moduleColor = '#6b7280'; // Gris clair pour mouvement
-          break;
-        default:
-          moduleColor = '#6b7280';
-      }
+            if (module) {
+          // Couleur basée sur le type de module
+          let moduleColor = '#6b7280'; // Gris clair par défaut
+          switch (module.type) {
+            case 'movement':
+              moduleColor = '#6b7280'; // Gris clair pour mouvement
+              break;
+            case 'armor':
+              moduleColor = '#1e90ff'; // Bleu vif pour armure
+              break;
+            default:
+              moduleColor = '#6b7280';
+          }
       
       // Calculer le ratio de santé pour la jauge
       const healthRatio = Math.max(0, Math.min(1, module.hp / module.maxHp));
