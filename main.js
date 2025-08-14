@@ -116,6 +116,7 @@ function startGame() {
   state.units = [];
   // init cartographies partagées
   state.playerMaps = Array.from({ length: state.players }, () => ({ knownWalls: new Set(), knownFree: new Set(), visitCounts: new Map() }));
+  populateFullMapKnowledge();
   // Spawns init: 3 unités par joueur, à côté du QG
   for (let i = 0; i < state.players; i++) {
     const colorKey = state.playerColors[i];
@@ -148,6 +149,7 @@ function regenerateMapKeepPause() {
   state.nextUnitId = 1; // repart des IDs 1, 2, 3...
   state.programs = {}; // nettoie les anciens programmes liés à d'anciens IDs
   state.playerMaps = Array.from({ length: state.players }, () => ({ knownWalls: new Set(), knownFree: new Set(), visitCounts: new Map() }));
+  populateFullMapKnowledge();
   for (let i = 0; i < state.players; i++) {
     const colorKey = state.playerColors[i];
     const hq = state.hqs.find(h => h.colorKey === colorKey);
@@ -666,8 +668,36 @@ function stepSimulation(dt = 0) {
     if (cmds[0] === 7 && cmds[1] === 18) {
       const myHq = state.hqs.find(h => h.colorKey === state.playerColors[u.ownerIndex]);
       if (myHq) {
-        // Arrêt lorsqu'on atteint le périmètre autour du 3x3
         if (isAtHQPerimeter(u.x, u.y, myHq)) continue;
+        const stepTo = planStepToHQUsingSharedMap(u, myHq);
+        if (stepTo) {
+          const now = performance.now();
+          const tileDuration = Math.max(120, Math.floor(1000 / state.unitSpeedTilesPerSec));
+          u.anim = { fromX: u.x, fromY: u.y, toX: stepTo.x, toY: stepTo.y, startTime: now, endTime: now + tileDuration };
+          const ang = Math.atan2(stepTo.y - u.y, stepTo.x - u.x);
+          u.headingFrom = (u.headingTo ?? ang);
+          u.headingTo = ang;
+          u.headingStart = now; u.headingEnd = now + tileDuration;
+          updateRecentTrail(u, u.x, u.y);
+          u.x = stepTo.x; u.y = stepTo.y; u.lastDir = [Math.sign(stepTo.x - u.anim.fromX), Math.sign(stepTo.y - u.anim.fromY)]; moved = true;
+          const pm2 = state.playerMaps[u.ownerIndex]; if (pm2 && pm2.knownFree) pm2.knownFree.add(`${u.x},${u.y}`);
+          continue;
+        }
+        // fallback 1: tente de rejoindre la zone connue puis chemin direct HQ
+        const bridge = planStepBridgeToKnownThenHQ(u, myHq);
+        if (bridge) {
+          const now2 = performance.now();
+          const td = Math.max(120, Math.floor(1000 / state.unitSpeedTilesPerSec));
+          u.anim = { fromX: u.x, fromY: u.y, toX: bridge.x, toY: bridge.y, startTime: now2, endTime: now2 + td };
+          const ang2 = Math.atan2(bridge.y - u.y, bridge.x - u.x);
+          u.headingFrom = (u.headingTo ?? ang2);
+          u.headingTo = ang2; u.headingStart = now2; u.headingEnd = now2 + td;
+          updateRecentTrail(u, u.x, u.y);
+          u.x = bridge.x; u.y = bridge.y; u.lastDir = [Math.sign(bridge.x - u.anim.fromX), Math.sign(bridge.y - u.anim.fromY)]; moved = true;
+          const pm3 = state.playerMaps[u.ownerIndex]; if (pm3 && pm3.knownFree) pm3.knownFree.add(`${u.x},${u.y}`);
+          continue;
+        }
+        // fallback 2: stratégie locale si pas de pont
         const didMove = moveTowardOrExploreInline(u, myHq.cx, myHq.cy);
         if (didMove) moved = true;
         continue;
@@ -839,6 +869,149 @@ function moveTowardOrExploreInline(u, tx, ty) {
   return true;
 }
 
+// Planifie un pas vers le QG en utilisant la cartographie partagée (connue du joueur).
+// Utilise un A* sur les cases connues libres (knownFree) et non-murs connus (pas dans knownWalls),
+// avec heuristique manhattan vers le QG. Si aucun chemin connu, retourne null.
+function planStepToHQUsingSharedMap(u, hq) {
+  const pm = state.playerMaps[u.ownerIndex];
+  if (!pm) return null;
+  const knownFree = pm.knownFree || new Set();
+  const knownWalls = pm.knownWalls || new Set();
+  const startKey = `${u.x},${u.y}`;
+  const goalKey = `${hq.cx},${hq.cy}`;
+
+  // Autorise la case de départ même si non marquée, et la case but
+  const isKnownWalkable = (x, y) => {
+    if (!isInBounds(x, y)) return false;
+    // Avec connaissance globale: on s'appuie sur la carte réelle
+    if (state.tiles[y][x]) return false;
+    if (isHQCell(x, y) && !(x === hq.cx && y === hq.cy)) return false;
+    return true;
+  };
+
+  if (!isKnownWalkable(u.x, u.y)) return null;
+
+  const neighbors = (x, y) => {
+    const dirs = [ [1,0], [-1,0], [0,1], [0,-1] ];
+    const arr = [];
+    for (const [dx, dy] of dirs) {
+      const nx = x + dx, ny = y + dy;
+      if (!isKnownWalkable(nx, ny)) continue;
+      if (unitAt(nx, ny)) continue;
+      arr.push({ x: nx, y: ny });
+    }
+    return arr;
+  };
+
+  const h = (x, y) => Math.abs(hq.cx - x) + Math.abs(hq.cy - y);
+
+  const open = new MinHeap((a, b) => a.f - b.f);
+  const gScore = new Map();
+  const fScore = new Map();
+  const came = new Map();
+  const pushNode = (x, y, g, f, parentKey) => {
+    const k = `${x},${y}`;
+    if (gScore.has(k) && g >= gScore.get(k)) return;
+    gScore.set(k, g); fScore.set(k, f); if (parentKey) came.set(k, parentKey);
+    open.push({ x, y, f });
+  };
+  pushNode(u.x, u.y, 0, h(u.x, u.y), null);
+
+  const closed = new Set();
+  let foundKey = null;
+  while (!open.isEmpty()) {
+    const cur = open.pop();
+    const ck = `${cur.x},${cur.y}`;
+    if (closed.has(ck)) continue;
+    closed.add(ck);
+    if (cur.x === hq.cx && cur.y === hq.cy) { foundKey = ck; break; }
+    for (const nb of neighbors(cur.x, cur.y)) {
+      const nk = `${nb.x},${nb.y}`;
+      if (closed.has(nk)) continue;
+      const tentativeG = (gScore.get(ck) || 0) + 1;
+      pushNode(nb.x, nb.y, tentativeG, tentativeG + h(nb.x, nb.y), ck);
+    }
+  }
+  if (!foundKey) return null;
+  // remonte un seul pas
+  let curKey = foundKey;
+  let prevKey = came.get(curKey);
+  if (!prevKey) return null;
+  while (came.get(prevKey) && prevKey !== startKey) {
+    curKey = prevKey;
+    prevKey = came.get(prevKey);
+  }
+  const [sx, sy] = curKey.split(',').map(n => parseInt(n, 10));
+  return { x: sx, y: sy };
+}
+
+// Min-heap simple pour A*
+class MinHeap {
+  constructor(compare) { this.compare = compare; this.arr = []; }
+  isEmpty() { return this.arr.length === 0; }
+  push(v) { this.arr.push(v); this._up(this.arr.length - 1); }
+  pop() {
+    if (this.arr.length === 1) return this.arr.pop();
+    const top = this.arr[0];
+    this.arr[0] = this.arr.pop();
+    this._down(0);
+    return top;
+  }
+  _up(i) {
+    while (i > 0) {
+      const p = Math.floor((i - 1) / 2);
+      if (this.compare(this.arr[i], this.arr[p]) >= 0) break;
+      [this.arr[i], this.arr[p]] = [this.arr[p], this.arr[i]];
+      i = p;
+    }
+  }
+  _down(i) {
+    const n = this.arr.length;
+    while (true) {
+      let l = i * 2 + 1, r = i * 2 + 2, m = i;
+      if (l < n && this.compare(this.arr[l], this.arr[m]) < 0) m = l;
+      if (r < n && this.compare(this.arr[r], this.arr[m]) < 0) m = r;
+      if (m === i) break;
+      [this.arr[i], this.arr[m]] = [this.arr[m], this.arr[i]];
+      i = m;
+    }
+  }
+}
+
+// Cherche un "pont" jusqu'à la zone connue (knownFree) la plus proche, puis un pas dans sa direction.
+function planStepBridgeToKnownThenHQ(u, hq) {
+  // Avec connaissance globale, ce pont n'est plus requis; on fait un BFS vers la cible pour un pas robuste.
+  const startKey = `${u.x},${u.y}`;
+  const ql = [{ x: u.x, y: u.y }];
+  const prev = new Map(); prev.set(startKey, null);
+  const seen = new Set([startKey]);
+  const dirs = [ [1,0], [-1,0], [0,1], [0,-1] ];
+  let endKey = null;
+  while (ql.length) {
+    const cur = ql.shift();
+    if (cur.x === hq.cx && cur.y === hq.cy) { endKey = `${cur.x},${cur.y}`; break; }
+    for (const [dx, dy] of dirs) {
+      const nx = cur.x + dx, ny = cur.y + dy;
+      const nk = `${nx},${ny}`;
+      if (seen.has(nk)) continue;
+      if (!isInBounds(nx, ny)) continue;
+      if (state.tiles[ny][nx]) continue; // mur réel
+      if (unitAt(nx, ny)) continue;
+      seen.add(nk); prev.set(nk, `${cur.x},${cur.y}`); ql.push({ x: nx, y: ny });
+    }
+  }
+  if (!endKey) return null;
+  // remonte un seul pas depuis la position actuelle
+  let curKey = endKey;
+  let parent = prev.get(curKey);
+  if (!parent) return null;
+  while (prev.get(parent) && parent !== startKey) {
+    curKey = parent; parent = prev.get(parent);
+  }
+  const [sx, sy] = curKey.split(',').map(n => parseInt(n, 10));
+  return { x: sx, y: sy };
+}
+
 // Rendu simple sur canvas (placeholder labyrinthe futur)
 function resizeCanvas(c) {
   const dpr = Math.min(2, window.devicePixelRatio || 1);
@@ -878,6 +1051,25 @@ function computeDesiredMapDims(opts = {}) {
   const adjCols = Math.max(16, cols - (cols % 1));
   const adjRows = Math.max(12, rows - (rows % 1));
   return { cols: adjCols, rows: adjRows };
+}
+
+// Remplit la connaissance de carte globale pour chaque joueur (toutes cases connues)
+function populateFullMapKnowledge() {
+  if (!state.tiles || !state.rows || !state.cols || !state.playerMaps) return;
+  for (let p = 0; p < state.players; p++) {
+    const pm = state.playerMaps[p];
+    if (!pm) continue;
+    pm.knownFree = pm.knownFree || new Set();
+    pm.knownWalls = pm.knownWalls || new Set();
+    pm.knownFree.clear();
+    pm.knownWalls.clear();
+    for (let y = 0; y < state.rows; y++) {
+      for (let x = 0; x < state.cols; x++) {
+        if (state.tiles[y][x]) pm.knownWalls.add(`${x},${y}`);
+        else pm.knownFree.add(`${x},${y}`);
+      }
+    }
+  }
 }
 
 function drawScene(canvas) {
