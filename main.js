@@ -1874,11 +1874,11 @@ function renderSpawnPanel() {
   });
   const movementLabel = el('span', { 
     textContent: 'Mouvement', 
-    style: 'font-size:11px;color:#cfd6e6;margin-bottom:4px;' 
+    style: 'font-size:15px;color:#cfd6e6;margin-bottom:4px;font-weight:600;' 
   });
   const movementCost = el('span', { 
     textContent: '50', 
-    style: 'color:#ffd54a;font-size:10px;font-weight:600;' 
+    style: 'color:#ffd54a;font-size:14px;font-weight:800;' 
   });
   movementLabelContainer.append(movementLabel, movementCost);
   
