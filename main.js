@@ -47,6 +47,8 @@ const el = (tag, props = {}, children = []) => {
 const HQ_SIZE_TILES = 6; // largeur/hauteur du QG en tuiles
 const HQ_HALF_SPAN = Math.floor(HQ_SIZE_TILES / 2); // 3 pour 6x6
 const HQ_PERIM_RADIUS = HQ_HALF_SPAN + 2; // zone de proximité pour "aller vers QG"
+// Rayon bloquant (chevauchement interdit) légèrement plus petit pour permettre aux unités de s'approcher d'une case
+const HQ_BLOCK_HALF_SPAN = Math.max(1, HQ_HALF_SPAN - 1);
 // Géométrie estimée de l'encoche visible dans l'image du QG
 const HQ_HOLE_METRICS = {
   widthRatio: 0.20,   // largeur de la petite ouverture du bas (proportion du sprite)
@@ -1390,8 +1392,8 @@ function isClearHQArea(cx, cy) {
 }
 
 function ensureOpenHQArea(cx, cy) {
-  for (let y = cy - HQ_HALF_SPAN; y <= cy + HQ_HALF_SPAN; y++) {
-    for (let x = cx - HQ_HALF_SPAN; x <= cx + HQ_HALF_SPAN; x++) {
+  for (let y = cy - HQ_BLOCK_HALF_SPAN; y <= cy + HQ_BLOCK_HALF_SPAN; y++) {
+    for (let x = cx - HQ_BLOCK_HALF_SPAN; x <= cx + HQ_BLOCK_HALF_SPAN; x++) {
       if (y > 0 && y < state.rows - 1 && x > 0 && x < state.cols - 1) state.tiles[y][x] = false;
     }
   }
@@ -1810,7 +1812,7 @@ function spawnUnitFromHQ(hq, ownerIndex, offsetIdx = 0) {
 // Cherche une case de sortie juste à l'extérieur du QG, en privilégiant N/E/S/O
 function findHQExitSpot(hq, attempt = 0) {
   const directions = [ [0,-1], [1,0], [0,1], [-1,0] ]; // N,E,S,O
-  const startRadius = HQ_HALF_SPAN + 1;
+  const startRadius = HQ_BLOCK_HALF_SPAN + 1;
   const extra = Math.min(6, attempt); // éloigne un peu pour spawns multiples
   for (const [dx, dy] of directions) {
     for (let r = startRadius; r <= startRadius + 3 + extra; r++) {
@@ -1828,7 +1830,7 @@ function findHQExitSpot(hq, attempt = 0) {
 }
 
 function isExitPathClear(hq, dx, dy, r) {
-  const startRadius = HQ_HALF_SPAN + 1;
+  const startRadius = HQ_BLOCK_HALF_SPAN + 1;
   for (let t = startRadius; t <= r; t++) {
     const px = hq.cx + dx * t;
     const py = hq.cy + dy * t;
@@ -2009,7 +2011,7 @@ function drawStarSymbol(ctx, cx, cy, r, hp) {
 function isHQCell(x, y) {
   if (!state.hqs) return false;
   for (const h of state.hqs) {
-    if (Math.abs(x - h.cx) <= HQ_HALF_SPAN && Math.abs(y - h.cy) <= HQ_HALF_SPAN) return true;
+    if (Math.abs(x - h.cx) <= HQ_BLOCK_HALF_SPAN && Math.abs(y - h.cy) <= HQ_BLOCK_HALF_SPAN) return true;
   }
   return false;
 }
