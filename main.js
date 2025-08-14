@@ -1409,9 +1409,11 @@ function drawHQ(ctx, hq, tile, ox, oy) {
   const cy = oy + (hq.cy + 0.5) * tile;
   const size = tile * HQ_SIZE_TILES; // couvre le HQ_SIZE_TILES x HQ_SIZE_TILES
   const img = HQ_IMAGES[hq.colorKey];
+  const baseColor = colorFromKey(hq.colorKey);
 
   if (img && img.complete && img.naturalWidth > 0) {
     // Jauges derrière l'image, visibles via les ouvertures
+    drawHQHalo(ctx, cx, cy, size, baseColor);
     drawHQEnergyBar(ctx, hq, tile, cx, cy, size);
     drawHQHealthBar(ctx, hq, tile, cx, cy, size, 'hole');
     ctx.save();
@@ -1421,11 +1423,12 @@ function drawHQ(ctx, hq, tile, ox, oy) {
     return;
   }
 
-  // Fallback minimal si l'image n'est pas prête: disque couleur à la taille du QG
+  // Fallback minimal si l'image n'est pas prête: halo + disque couleur à la taille du QG
   const radius = tile * (HQ_SIZE_TILES / 2);
   const palette = { blue: '#4f8cff', red: '#f55454', purple: '#9b5cff', green: '#42d77d' };
   const base = palette[hq.colorKey] || '#4f8cff';
   ctx.save();
+  drawHQHalo(ctx, cx, cy, size, base);
   const grad = ctx.createRadialGradient(cx, cy, radius * 0.2, cx, cy, radius);
   grad.addColorStop(0, lighten(base, 0.25));
   grad.addColorStop(1, shade(base, 0.65));
@@ -1437,6 +1440,23 @@ function drawHQ(ctx, hq, tile, ox, oy) {
 
   // Jauge de vie (fallback, visible en dessous de l'image vectorielle)
   drawHQHealthBar(ctx, hq, tile, cx, cy, size, 'below');
+}
+
+function drawHQHalo(ctx, cx, cy, size, baseColor) {
+  const rgb = hexToRgb(baseColor);
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  const inner = size * 0.30;
+  const outer = size * 1.20;
+  const grad = ctx.createRadialGradient(cx, cy, inner, cx, cy, outer);
+  grad.addColorStop(0, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.22)`);
+  grad.addColorStop(0.6, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.10)`);
+  grad.addColorStop(1, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.0)`);
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.arc(cx, cy, outer, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
 }
 
 function drawHQHealthBar(ctx, hq, tile, cx, cy, size, placement = 'hole') {
