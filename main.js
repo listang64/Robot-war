@@ -47,6 +47,12 @@ const el = (tag, props = {}, children = []) => {
 const HQ_SIZE_TILES = 6; // largeur/hauteur du QG en tuiles
 const HQ_HALF_SPAN = Math.floor(HQ_SIZE_TILES / 2); // 3 pour 6x6
 const HQ_PERIM_RADIUS = HQ_HALF_SPAN + 2; // zone de proximité pour "aller vers QG"
+// Géométrie estimée de l'encoche visible dans l'image du QG
+const HQ_HOLE_METRICS = {
+  widthRatio: 0.20,   // largeur de la petite ouverture du bas (proportion du sprite)
+  heightRatio: 0.14,  // non utilisé directement (on garde la hauteur via "tile")
+  offsetYRatio: 0.128, // encore un peu plus bas
+};
 
 function mountApp() {
   preloadHQImages();
@@ -229,6 +235,19 @@ function renderGame() {
     b.addEventListener('click', () => selectDevSpawn('unit', col));
     devList.append(b);
   }
+  // --- Bouton: -100 PV au QG du joueur courant ---
+  const dmgBtn = el('button', { className: 'dev-dmg', title: '-100 PV QG actif' });
+  dmgBtn.textContent = '-100 PV QG';
+  dmgBtn.addEventListener('click', () => {
+    const key = state.playerColors[state.currentPlayerIndex];
+    const hq = state.hqs && state.hqs.find(h => h.colorKey === key);
+    if (!hq) return;
+    hq.hp = Math.max(0, (hq.hp ?? 1000) - 100);
+    const canvas = q('#game'); if (canvas) drawScene(canvas);
+    updateHqHpLine();
+    // ne ferme pas l'overlay
+  });
+  devList.append(dmgBtn);
   const closeBtn = el('button', { className: 'dev-close', title: 'Fermer' });
   closeBtn.textContent = 'X';
   closeBtn.addEventListener('click', () => { const ov = q('#devOverlay'); if (ov) ov.classList.remove('visible'); devSpawnSelection = null; });
@@ -1302,7 +1321,7 @@ function computeHQs(numPlayers) {
     const target = cands[pick[i]];
     const near = findOpenCenterNear(target.x, target.y, minSep, result);
     ensureOpenHQArea(near.x, near.y);
-    result.push({ cx: near.x, cy: near.y, colorKey: state.playerColors[i] });
+    result.push({ cx: near.x, cy: near.y, colorKey: state.playerColors[i], hp: 1000, hpMax: 1000 });
   }
   return result;
 }
@@ -1361,6 +1380,8 @@ function drawHQ(ctx, hq, tile, ox, oy) {
   const img = HQ_IMAGES[hq.colorKey];
 
   if (img && img.complete && img.naturalWidth > 0) {
+    // Jauge derrière l'image, visible via l'encoche transparente
+    drawHQHealthBar(ctx, hq, tile, cx, cy, size, 'hole');
     ctx.save();
     ctx.imageSmoothingEnabled = true;
     ctx.drawImage(img, cx - size / 2, cy - size / 2, size, size);
@@ -1381,11 +1402,61 @@ function drawHQ(ctx, hq, tile, ox, oy) {
   ctx.arc(cx, cy, radius, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
+
+  // Jauge de vie (fallback, visible en dessous de l'image vectorielle)
+  drawHQHealthBar(ctx, hq, tile, cx, cy, size, 'below');
+}
+
+function drawHQHealthBar(ctx, hq, tile, cx, cy, size, placement = 'hole') {
+  let barWidth, barHeight, x, y;
+  if (placement === 'hole') {
+    // Barre centrée DANS l'encoche de l'image (derrière l'image)
+    barWidth = Math.floor(size * (HQ_HOLE_METRICS.widthRatio));
+    // Hauteur augmentée encore
+    barHeight = Math.max(6, Math.floor(tile * 0.32));
+    const offsetY = Math.floor(size * HQ_HOLE_METRICS.offsetYRatio); // décalage depuis le centre vers le bas
+    x = Math.round(cx - barWidth / 2);
+    y = Math.round(cy + offsetY - barHeight / 2);
+  } else {
+    // Barre SOUS l'image (fallback)
+    barWidth = Math.floor(size * (HQ_HOLE_METRICS.widthRatio));
+    barHeight = Math.max(6, Math.floor(tile * 0.3));
+    const gap = Math.max(1, Math.floor(tile * 0.12));
+    x = Math.round(cx - barWidth / 2);
+    y = Math.round(cy + size / 2 + gap);
+  }
+  const ratio = Math.max(0, Math.min(1, (hq && hq.hpMax) ? (hq.hp / hq.hpMax) : 1));
+
+  // Fond et contour
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.strokeStyle = 'rgba(240,240,255,0.35)';
+  ctx.lineWidth = Math.max(1, Math.floor(tile * 0.06));
+  ctx.beginPath();
+  ctx.rect(x, y, barWidth, barHeight);
+  ctx.fill();
+  ctx.stroke();
+
+  // Remplissage vert selon ratio
+  const fillWidth = Math.floor(barWidth * ratio);
+  ctx.fillStyle = '#39ff14';
+  ctx.beginPath();
+  ctx.rect(x, y, fillWidth, barHeight);
+  ctx.fill();
+  ctx.restore();
 }
 
 // --- Panel et logique de spawn ---
 function renderSpawnPanel() {
   const panel = el('div', { className: 'spawn-panel', id: 'spawnPanel' });
+  // En-tête QG + PV (centrés)
+  const header = el('div', { style: 'text-align:center;' });
+  const title = el('h3', { textContent: 'QG', style: 'margin:0 0 4px 0;' });
+  const hpLabel = el('div', { id: 'hqHpLabel', textContent: 'Points de vie', style: 'color:#ffd54a;font-weight:800;margin:0 0 4px 0;' });
+  const hpLine = el('div', { id: 'hqHpLine', style: 'color:#ffd54a;font-weight:800;margin:0 0 10px 0;' });
+  header.append(title, hpLabel, hpLine);
+  panel.append(header);
+
   const list = el('div', { className: 'unit-list' });
   const card = el('div', { className: 'unit-card' });
   const icon = el('canvas', { width: 48, height: 48, id: 'spawnCreateIcon' });
@@ -1395,7 +1466,20 @@ function renderSpawnPanel() {
   card.append(icon, btn);
   list.append(card);
   panel.append(list);
+  // init texte PV
+  updateHqHpLine();
   return panel;
+}
+
+function updateHqHpLine() {
+  const hpLine = q('#hqHpLine');
+  if (!hpLine) return;
+  const key = state.playerColors[state.currentPlayerIndex];
+  const hq = state.hqs && state.hqs.find(h => h.colorKey === key);
+  if (!hq) { hpLine.textContent = ''; return; }
+  hpLine.textContent = `${hq.hp} / ${hq.hpMax}`;
+  hpLine.style.color = '#ffd54a';
+  hpLine.style.fontWeight = '800';
 }
 
 function updateSpawnCreateIconColor() {
@@ -1518,6 +1602,7 @@ document.addEventListener('click', (e) => {
     panel.classList.toggle('visible');
     // recolor toutes les icônes selon le joueur actif
     recolorSpawnPanelIcons();
+    updateHqHpLine();
     const canvas2 = q('#game'); if (canvas2) drawScene(canvas2);
   } else if (!panel.contains(e.target)) {
     panel.classList.remove('visible');
@@ -1540,6 +1625,7 @@ function recolorSpawnPanelIcons() {
     const fn = map[t];
     if (fn) fn(cv.getContext('2d'), cv.width, color);
   });
+  updateHqHpLine();
 }
 
 function spawnUnit() {
