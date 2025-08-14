@@ -1818,22 +1818,27 @@ function renderSpawnPanel() {
   header.append(title, hpLabel, hpLine, energyLabel, energyLine);
   panel.append(header);
 
+  // Séparateur "----" au dessus du titre
+  const separator = el('div', { 
+    textContent: '----', 
+    style: 'text-align:center;color:#9aa4b2;margin:8px 0;font-weight:600;' 
+  });
+  
   // Titre au dessus de tout (même au dessus de la box)
   const mainTitle = el('div', { 
     textContent: 'Créer ton robot', 
     style: 'text-align:center;color:#cfd6e6;font-size:16px;font-weight:600;margin-bottom:12px;position:relative;z-index:10;' 
   });
   
-  const list = el('div', { className: 'unit-list' });
-  const card = el('div', { className: 'unit-card' });
+  // BOX 1: Création d'unité
+  const creationBox = el('div', { className: 'unit-card', style: 'margin-bottom:12px;' });
   
-  // LIGNE 1: Bouton Créer + Coût (centrés dans la box)
-  const line1 = el('div', { 
-    style: 'display:flex;align-items:center;justify-content:center;gap:12px;margin-bottom:16px;' 
+  const createLine = el('div', { 
+    style: 'display:flex;align-items:center;justify-content:space-between;padding:16px 24px;gap:20px;' 
   });
   const btn = button('Créer', () => spawnUnit());
-  btn.style.fontSize = '14px';
-  btn.style.padding = '8px 20px';
+  btn.style.fontSize = '12px';
+  btn.style.padding = '6px 12px';
   btn.style.borderRadius = '6px';
   btn.style.border = '1px solid #178a57';
   btn.style.background = 'linear-gradient(180deg, #2ec27e, #1f9e66)';
@@ -1844,50 +1849,61 @@ function renderSpawnPanel() {
   const energyCost = el('div', { 
     id: 'energyCost',
     textContent: '0 ⚡',
-    style: 'color:#ff4444;font-size:14px;font-weight:600;padding:8px 12px;background:rgba(255,68,68,0.1);border-radius:4px;border:1px solid rgba(255,68,68,0.3);' 
+    style: 'color:#ff4444;font-size:11px;font-weight:600;padding:6px;background:rgba(255,68,68,0.1);border-radius:4px;border:1px solid rgba(255,68,68,0.3);' 
   });
-  line1.append(btn, energyCost);
+  createLine.append(btn, energyCost);
+  creationBox.append(createLine);
   
-  // LIGNE 2: Sous-titre Modules
-  const line2 = el('div', { 
+  // Titre Modules (au-dessus de la box)
+  const moduleTitle = el('div', { 
     textContent: 'Modules', 
-    style: 'text-align:center;color:#cfd6e6;font-size:14px;font-weight:600;margin-bottom:12px;' 
+    style: 'text-align:center;color:#cfd6e6;font-size:14px;font-weight:600;margin:12px 0 8px 0;' 
   });
   
-  // LIGNE 3: Module Mouvement avec tout centré
-  const line3 = el('div', { 
-    style: 'display:flex;align-items:center;justify-content:center;gap:8px;flex-wrap:wrap;' 
+  // BOX 2: Modules
+  const moduleBox = el('div', { className: 'unit-card' });
+  
+  // Module Mouvement avec tout aligné horizontalement
+  const moduleLine = el('div', { 
+    style: 'display:flex;align-items:center;justify-content:space-between;padding:14px 20px;gap:16px;' 
   });
   
-  // Container pour Mouvement + coût
+  // Container pour Mouvement + coût (à gauche)
   const movementLabelContainer = el('div', { 
     style: 'display:flex;flex-direction:column;align-items:center;' 
   });
   const movementLabel = el('span', { 
     textContent: 'Mouvement', 
-    style: 'font-size:13px;color:#cfd6e6;' 
+    style: 'font-size:11px;color:#cfd6e6;margin-bottom:4px;' 
   });
   const movementCost = el('span', { 
     textContent: '50', 
-    style: 'color:#ffd54a;font-size:11px;font-weight:600;' 
+    style: 'color:#ffd54a;font-size:10px;font-weight:600;' 
   });
   movementLabelContainer.append(movementLabel, movementCost);
+  
+  // Container pour les contrôles (à droite)
+  const controlsContainer = el('div', { 
+    style: 'display:flex;align-items:center;gap:6px;' 
+  });
   
   const movementCount = el('div', { 
     id: 'movementCount',
     textContent: '0', 
-    style: 'background:#6b7280;color:#fff;border-radius:4px;padding:3px 8px;font-size:12px;min-width:24px;text-align:center;font-weight:600;' 
+    style: 'background:#6b7280;color:#fff;border-radius:4px;padding:3px 6px;font-size:11px;min-width:20px;text-align:center;font-weight:600;' 
   });
   const movementMinus = el('button', { 
     textContent: '−',
-    style: 'width:24px;height:24px;border-radius:4px;border:1px solid #4b5563;background:#374151;color:#fff;font-size:14px;font-weight:600;display:flex;align-items:center;justify-content:center;cursor:pointer;' 
+    style: 'width:20px;height:20px;border-radius:4px;border:1px solid #4b5563;background:#374151;color:#fff;font-size:12px;font-weight:600;display:flex;align-items:center;justify-content:center;cursor:pointer;' 
   });
   const movementPlus = el('button', { 
     textContent: '+',
-    style: 'width:24px;height:24px;border-radius:4px;border:1px solid #4b5563;background:#374151;color:#fff;font-size:14px;font-weight:600;display:flex;align-items:center;justify-content:center;cursor:pointer;' 
+    style: 'width:20px;height:20px;border-radius:4px;border:1px solid #4b5563;background:#374151;color:#fff;font-size:12px;font-weight:600;display:flex;align-items:center;justify-content:center;cursor:pointer;' 
   });
   
-  line3.append(movementLabelContainer, movementCount, movementMinus, movementPlus);
+  controlsContainer.append(movementCount, movementMinus, movementPlus);
+  
+  moduleLine.append(movementLabelContainer, controlsContainer);
   
   movementPlus.addEventListener('click', () => {
     const total = getTotalModules();
@@ -1906,9 +1922,11 @@ function renderSpawnPanel() {
     }
   });
   
-  card.append(line1, line2, line3);
-  list.append(card);
-  panel.append(mainTitle, list);
+  moduleBox.append(moduleLine);
+  
+  const list = el('div', { className: 'unit-list' });
+  list.append(creationBox, moduleTitle, moduleBox);
+  panel.append(separator, mainTitle, list);
   // init texte PV et coût énergie
   updateHqHpLine();
   updateEnergyCost();
