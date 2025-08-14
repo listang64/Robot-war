@@ -701,7 +701,7 @@ function moveTowardOrExploreInline(u, tx, ty) {
     if (blocked) { if (u.knownWalls) u.knownWalls.add(`${nx},${ny}`); continue; }
     if (unitAt(nx, ny)) continue;
     const key = `${nx},${ny}`;
-    if (u.recentTrail && u.recentTrail.includes(key)) continue;
+    // En mode retour, autorise à repasser par le trail pour retrouver le chemin
     if (u.knownFree && u.knownFree.size > 0 && !u.knownFree.has(key)) continue;
     const stepCost = (Math.abs(d[0]) + Math.abs(d[1]) === 2) ? 1.4142 : 1;
     const dist = Math.abs(tx - nx) + Math.abs(ty - ny) + 0.01 * stepCost;
@@ -721,7 +721,7 @@ function moveTowardOrExploreInline(u, tx, ty) {
       if (unitAt(nx, ny)) continue;
       if (u.lastDir && d[0] === -u.lastDir[0] && d[1] === -u.lastDir[1]) continue; // évite demi-tour
       const key = `${nx},${ny}`;
-      if (u.recentTrail && u.recentTrail.includes(key)) continue;
+      // autorise le trail pour permettre le retour
       const stepCost2 = (Math.abs(d[0]) + Math.abs(d[1]) === 2) ? 1.4142 : 1;
       const dist = Math.abs(tx - nx) + Math.abs(ty - ny) + 0.005 * stepCost2;
       if (dist === dist0) { best = d; break; }
