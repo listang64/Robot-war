@@ -1352,6 +1352,7 @@ function computeHQs(numPlayers) {
     const target = cands[pick[i]];
     const near = findOpenCenterNear(target.x, target.y, minSep, result);
     ensureOpenHQArea(near.x, near.y);
+    ensureOpenHQClearance(near.x, near.y, 2); // garantit 2 cases de sol autour du QG
     result.push({ cx: near.x, cy: near.y, colorKey: state.playerColors[i], hp: 1000, hpMax: 1000, energy: 300, energyMax: 1000 });
   }
   return result;
@@ -1393,6 +1394,23 @@ function ensureOpenHQArea(cx, cy) {
     for (let x = cx - HQ_HALF_SPAN; x <= cx + HQ_HALF_SPAN; x++) {
       if (y > 0 && y < state.rows - 1 && x > 0 && x < state.cols - 1) state.tiles[y][x] = false;
     }
+  }
+}
+
+// Ouvre une couronne de "clearance" autour du QG pour éviter tout blocage des sorties
+function ensureOpenHQClearance(cx, cy, clearanceTiles = 2) {
+  // Ouvre une CROIX (N/E/S/O) autour du centre du QG,
+  // jusqu'à HQ_HALF_SPAN + clearanceTiles cases depuis le centre.
+  const maxSpan = HQ_HALF_SPAN + Math.max(1, clearanceTiles);
+  for (let r = 1; r <= maxSpan; r++) {
+    // vers le nord
+    if (cy - r > 0 && cy - r < state.rows - 1) state.tiles[cy - r][cx] = false;
+    // vers le sud
+    if (cy + r > 0 && cy + r < state.rows - 1) state.tiles[cy + r][cx] = false;
+    // vers l'ouest
+    if (cx - r > 0 && cx - r < state.cols - 1) state.tiles[cy][cx - r] = false;
+    // vers l'est
+    if (cx + r > 0 && cx + r < state.cols - 1) state.tiles[cy][cx + r] = false;
   }
 }
 
