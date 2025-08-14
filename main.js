@@ -892,16 +892,16 @@ function drawScene(canvas) {
   // - Zones jouables (sol) plus claires, bords arrondis, outline sombre
   if (state.tiles) drawCaveSurface(ctx, tile, ox, oy);
 
-  // Dessin des QG des joueurs
+  // Dessin des unités d'abord (sous le QG)
+  for (const u of state.units) {
+    drawUnit(ctx, u, tile, ox, oy);
+  }
+
+  // Dessin des QG par-dessus les unités (unités apparaissent sous l'image du QG)
   if (state.hqs && state.hqs.length) {
     for (const hq of state.hqs) {
       drawHQ(ctx, hq, tile, ox, oy);
     }
-  }
-
-  // Dessin des unités
-  for (const u of state.units) {
-    drawUnit(ctx, u, tile, ox, oy);
   }
 
   ctx.restore();
@@ -1746,52 +1746,77 @@ function spawnUnit() {
   const activeKey = state.playerColors[state.currentPlayerIndex];
   const hq = state.hqs.find(h => h.colorKey === activeKey);
   if (!hq) return;
-  // Cherche la case libre la plus proche AUTOUR du QG (infranchissable)
-  let spot = null;
-  for (let r = HQ_HALF_SPAN + 1; r <= HQ_HALF_SPAN + 4 && !spot; r++) {
-    for (let dy = -r; dy <= r && !spot; dy++) {
-      for (let dx = -r; dx <= r; dx++) {
-        if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue; // anneau
-        const x = hq.cx + dx;
-        const y = hq.cy + dy;
-        if (!isInBounds(x, y)) continue;
-        if (isBlocked(x, y)) continue;
-        if (unitAt(x, y)) continue;
-        spot = { x, y }; break;
-      }
-    }
-  }
-  if (!spot) return;
-  const idNum = state.nextUnitId++;
-  state.units.push({ id: idNum, ownerIndex: state.currentPlayerIndex, x: spot.x, y: spot.y, hp: 1, recentTrail: [], lastDir: null, anim: null, headingFrom: 0, headingTo: 0, headingStart: 0, headingEnd: 0 });
-  // Marque la case comme connue libre pour ce joueur
-  const pm = state.playerMaps[state.currentPlayerIndex];
-  if (pm) pm.knownFree.add(`${spot.x},${spot.y}`);
+  const created = spawnUnitFromHQ(hq, state.currentPlayerIndex);
+  if (!created) return;
   const panel = q('#spawnPanel'); if (panel) panel.classList.remove('visible');
   const canvas = q('#game'); if (canvas) drawScene(canvas);
 }
 
 function spawnInitialUnitsAtHQ(hq, ownerIndex, count) {
-  const candidates = [];
-  for (let dy = -(HQ_HALF_SPAN + 2); dy <= (HQ_HALF_SPAN + 2); dy++) {
-    for (let dx = -(HQ_HALF_SPAN + 2); dx <= (HQ_HALF_SPAN + 2); dx++) {
-      const x = hq.cx + dx, y = hq.cy + dy;
-      if (!isInBounds(x, y)) continue;
-      if (isHQCell(x, y)) continue;
-      if (isBlocked(x, y)) continue;
-      candidates.push({ x, y });
-    }
-  }
-  let i = 0; const pm = state.playerMaps[ownerIndex];
-  while (i < count && candidates.length) {
-    const idx = Math.floor(Math.random() * candidates.length);
-    const spot = candidates.splice(idx, 1)[0];
-    if (unitAt(spot.x, spot.y)) continue;
-    const idNum = state.nextUnitId++;
-    state.units.push({ id: idNum, ownerIndex, x: spot.x, y: spot.y, hp: 1, recentTrail: [], lastDir: null, anim: null, headingFrom: 0, headingTo: 0, headingStart: 0, headingEnd: 0 });
-    if (pm) pm.knownFree.add(`${spot.x},${spot.y}`);
+  let i = 0;
+  while (i < count) {
+    if (!spawnUnitFromHQ(hq, ownerIndex, i)) break;
     i++;
   }
+}
+
+// Fait apparaître l'unité au centre du QG puis l'anime vers une sortie N/S/E/O
+function spawnUnitFromHQ(hq, ownerIndex, offsetIdx = 0) {
+  const spot = findHQExitSpot(hq, offsetIdx);
+  if (!spot) return false;
+  if (unitAt(spot.x, spot.y)) return false;
+  const idNum = state.nextUnitId++;
+  const now = performance.now();
+  const tileDuration = 2160; // encore 2x plus lent (au total 6x)
+  const headingAng = Math.atan2(spot.y - hq.cy, spot.x - hq.cx);
+  const unit = {
+    id: idNum,
+    ownerIndex,
+    x: spot.x,
+    y: spot.y,
+    hp: 1,
+    recentTrail: [],
+    lastDir: null,
+    anim: { fromX: hq.cx, fromY: hq.cy, toX: spot.x, toY: spot.y, startTime: now, endTime: now + tileDuration },
+    headingFrom: headingAng,
+    headingTo: headingAng,
+    headingStart: now,
+    headingEnd: now + tileDuration,
+  };
+  state.units.push(unit);
+  const pm = state.playerMaps[ownerIndex];
+  if (pm) pm.knownFree.add(`${spot.x},${spot.y}`);
+  return true;
+}
+
+// Cherche une case de sortie juste à l'extérieur du QG, en privilégiant N/E/S/O
+function findHQExitSpot(hq, attempt = 0) {
+  const directions = [ [0,-1], [1,0], [0,1], [-1,0] ]; // N,E,S,O
+  const startRadius = HQ_HALF_SPAN + 1;
+  const extra = Math.min(6, attempt); // éloigne un peu pour spawns multiples
+  for (const [dx, dy] of directions) {
+    for (let r = startRadius; r <= startRadius + 3 + extra; r++) {
+      const x = hq.cx + dx * r;
+      const y = hq.cy + dy * r;
+      if (!isInBounds(x, y)) continue;
+      if (isBlocked(x, y)) continue;
+      if (unitAt(x, y)) continue;
+      // Vérifie qu'aucune unité ne se trouve devant sur la trajectoire
+      if (!isExitPathClear(hq, dx, dy, r)) continue;
+      return { x, y };
+    }
+  }
+  return null;
+}
+
+function isExitPathClear(hq, dx, dy, r) {
+  const startRadius = HQ_HALF_SPAN + 1;
+  for (let t = startRadius; t <= r; t++) {
+    const px = hq.cx + dx * t;
+    const py = hq.cy + dy * t;
+    if (unitAt(px, py)) return false;
+  }
+  return true;
 }
 
 function isInBounds(x, y) { return x > 0 && y > 0 && x < state.cols - 1 && y < state.rows - 1; }
@@ -2041,5 +2066,6 @@ function fbmNoise2D(x, y, octaves = 4) {
 
 // Lancement
 window.addEventListener('DOMContentLoaded', mountApp);
+
 
 
