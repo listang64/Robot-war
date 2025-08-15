@@ -37,6 +37,7 @@ const state = {
   nextLocalIdByPlayer: [],
   lastSimTime: 0,
   unitSpeedTilesPerSec: 4.5,
+  currentFrame: 0,
 };
 
 const q = (sel, el = document) => el.querySelector(sel);
@@ -776,6 +777,9 @@ function startSimulationLoop() {
 function stepSimulation(dt = 0) {
   if (state.isPaused || !state.tiles || !state.units.length) return;
   
+  // Incrémenter le numéro de frame
+  state.currentFrame++;
+  
   // Vérifier les découvertes de QG pour toutes les unités
   for (const u of state.units) {
     checkForEnemyHQDiscovery(u);
@@ -832,6 +836,17 @@ function stepSimulation(dt = 0) {
         continue;
       }
     }
+    
+    // Sécurité : empêcher les déplacements multiples par frame
+    if (u.lastMoveTime && (performance.now() - u.lastMoveTime) < 500) {
+      continue; // Attendre au moins 500ms entre les déplacements
+    }
+    
+    // Empêcher les unités d'exécuter plusieurs actions dans la même frame
+    if (u.lastActionFrame === state.currentFrame) {
+      continue; // Cette unité a déjà agi cette frame
+    }
+    u.lastActionFrame = state.currentFrame;
     const cmds = state.programs[String(u.id)];
     if (!cmds || cmds.length === 0) {
       continue;
@@ -994,7 +1009,7 @@ function stepSimulation(dt = 0) {
         u.headingTo = ang;
         u.headingStart = now; u.headingEnd = now + tileDuration;
         updateRecentTrail(u, u.x, u.y);
-        u.x = nx; u.y = ny; u.lastDir = step; moved = true;
+        u.x = nx; u.y = ny; u.lastDir = step; recordUnitMove(u); moved = true;
           if (pm.knownFree) pm.knownFree.add(`${u.x},${u.y}`);
       }
     }
@@ -1100,7 +1115,7 @@ function moveTowardOrExploreInline(u, tx, ty) {
   u.headingTo = ang;
   u.headingStart = now; u.headingEnd = now + duration;
   updateRecentTrail(u, u.x, u.y);
-  u.x = nx; u.y = ny; u.lastDir = step; if (u.knownFree) u.knownFree.add(`${u.x},${u.y}`);
+  u.x = nx; u.y = ny; u.lastDir = step; recordUnitMove(u); if (u.knownFree) u.knownFree.add(`${u.x},${u.y}`);
   return true;
 }
 
@@ -1229,7 +1244,7 @@ function processAdvancedCommands(u, cmds) {
         u.headingStart = now; u.headingEnd = now + tileDuration;
         
         updateRecentTrail(u, u.x, u.y);
-        u.x = nx; u.y = ny; u.lastDir = step;
+        u.x = nx; u.y = ny; u.lastDir = step; recordUnitMove(u);
         if (pm.knownFree) pm.knownFree.add(`${u.x},${u.y}`);
         
         return { moved: true };
@@ -1285,7 +1300,7 @@ function fleeFromEnemy(u, enemy) {
     u.headingStart = now; u.headingEnd = now + tileDuration;
     
     updateRecentTrail(u, u.x, u.y);
-    u.x = nx; u.y = ny; u.lastDir = [dx, dy];
+    u.x = nx; u.y = ny; u.lastDir = [dx, dy]; recordUnitMove(u);
     
     // Mettre à jour la connaissance du joueur
     const pm = state.playerMaps[u.ownerIndex];
@@ -1677,7 +1692,7 @@ function executeAction(u, action) {
       u.headingTo = ang;
       u.headingStart = now; u.headingEnd = now + tileDuration;
       updateRecentTrail(u, u.x, u.y);
-      u.x = nx; u.y = ny; u.lastDir = step;
+      u.x = nx; u.y = ny; u.lastDir = step; recordUnitMove(u);
       if (pm.knownFree) pm.knownFree.add(`${u.x},${u.y}`);
       console.log(`Unité ${u.id}: Exploration réussie vers (${nx}, ${ny})`);
       return { moved: true };
@@ -2158,7 +2173,7 @@ function exploreSystematically(u) {
     u.headingStart = now; u.headingEnd = now + tileDuration;
     
     updateRecentTrail(u, u.x, u.y);
-    u.x = nx; u.y = ny;
+    u.x = nx; u.y = ny; recordUnitMove(u);
     u.lastDir = [dx, dy];
     
     // Mettre à jour les connaissances
@@ -2214,7 +2229,7 @@ function exploreSystematically(u) {
     u.headingStart = now; u.headingEnd = now + tileDuration;
     
     updateRecentTrail(u, u.x, u.y);
-    u.x = nx; u.y = ny;
+    u.x = nx; u.y = ny; recordUnitMove(u);
     u.lastDir = [dx, dy];
     
     // Mettre à jour les connaissances
@@ -2512,7 +2527,7 @@ function executeExploreAction(u) {
     u.headingTo = ang;
     u.headingStart = now; u.headingEnd = now + tileDuration;
     updateRecentTrail(u, u.x, u.y);
-    u.x = nx; u.y = ny; u.lastDir = bestMove;
+    u.x = nx; u.y = ny; u.lastDir = bestMove; recordUnitMove(u);
     if (pm.knownFree) pm.knownFree.add(`${u.x},${u.y}`);
     return { moved: true };
   }
@@ -3907,6 +3922,11 @@ function hasAnyWorkingModule(unit) {
   return unit.modules.some(module => module.hp > 0);
 }
 
+// Enregistre le temps de déplacement d'une unité
+function recordUnitMove(unit) {
+  unit.lastMoveTime = performance.now();
+}
+
 // Crée une animation d'explosion à la position donnée
 function createExplosion(tileX, tileY) {
   const now = performance.now();
@@ -4392,14 +4412,14 @@ function getSpeedModifier(unit) {
   // Si pas d'autres modules, vitesse normale
   if (otherModules === 0) return 1.0;
   
-  // Calcul du ratio: mouvement / autres
+  // Si autant ou plus de modules de mouvement que d'autres modules, vitesse normale
+  if (movementModules >= otherModules) return 1.0;
+  
+  // Si moins de modules de mouvement que d'autres modules, ralentissement proportionnel
   const ratio = movementModules / otherModules;
   
-  // Si ratio >= 1 (autant ou plus de mouvement que d'autres), vitesse normale
-  if (ratio >= 1.0) return 1.0;
-  
-  // Si ratio < 1 (moins de mouvement que d'autres), ralentissement proportionnel
-  return ratio;
+  // S'assurer que le ratio ne dépasse jamais 1.0 (vitesse normale maximale)
+  return Math.min(ratio, 1.0);
 }
 
 function updateModuleDisplay() {
@@ -5365,6 +5385,7 @@ function moveTowardEnemyHQWithPlayerKnowledge(u, targetX, targetY) {
   u.x = nx; 
   u.y = ny; 
   u.lastDir = best;
+  recordUnitMove(u);
   
   // Mettre à jour la connaissance du joueur
   if (pm.knownFree) {
