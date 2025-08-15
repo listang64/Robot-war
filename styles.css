@@ -268,10 +268,11 @@ canvas#game {
 }
 .spawn-panel.visible { display: block; }
 .spawn-panel h3 { margin: 0 0 10px; font-size: 16px; color: var(--text); }
-.unit-list { display: grid; gap: 10px; }
+.unit-list { display: grid; gap: 6px; }
 .unit-card {
-  display: grid; grid-template-columns: 56px 1fr auto; align-items: center; gap: 10px;
-  padding: 8px; border: 1px solid #2b3a55; border-radius: 12px; background: #161d2a;
+  display: grid; grid-template-columns: 56px 1fr auto; align-items: center; gap: 8px;
+  padding: 6px; border: 1px solid #2b3a55; border-radius: 10px; background: #161d2a;
+  min-height: auto;
 }
 .unit-card canvas { width: 48px; height: 48px; }
 .unit-card .title { font-weight: 700; }
