@@ -846,6 +846,8 @@ function stepSimulation(dt = 0) {
     if (u.lastActionFrame === state.currentFrame) {
       continue; // Cette unité a déjà agi cette frame
     }
+    
+    // Marquer que cette unité va agir cette frame
     u.lastActionFrame = state.currentFrame;
     const cmds = state.programs[String(u.id)];
     if (!cmds || cmds.length === 0) {
@@ -856,6 +858,8 @@ function stepSimulation(dt = 0) {
     const processed = processAdvancedCommands(u, cmds);
     if (processed) {
       if (processed.moved) moved = true;
+      // Marquer que l'unité a agi cette frame pour éviter le traitement multiple
+      u.lastActionFrame = state.currentFrame;
       continue;
     }
     
@@ -1389,7 +1393,7 @@ function processAttackCommand(u) {
   
   // Attaquer avec le type approprié
   const now = performance.now();
-  const attackCooldown = 1000; // 1 seconde entre les attaques
+  const attackCooldown = attackType === 'melee' ? 600 : 1000; // 600ms pour CAC, 1000ms pour distance
     
   // Vérifier si assez de temps s'est écoulé depuis la dernière attaque
   if (!u.lastAttackTime || (now - u.lastAttackTime) >= attackCooldown) {
@@ -1436,10 +1440,16 @@ function processAttackCommand(u) {
         return executeExploreAction(u);
       }
   } else {
-    // En attente du cooldown, ne pas bouger
-    const remainingCooldown = Math.ceil((attackCooldown - (now - u.lastAttackTime)) / 1000);
-    console.log(`Unité ${u.id} en cooldown d'attaque (${remainingCooldown}s restantes)`);
-    return { moved: false };
+    // En attente du cooldown, continuer à se déplacer vers la cible si c'est une attaque CAC
+    if (attackType === 'melee' && nearestEnemy) {
+      console.log(`Unité ${u.id} en cooldown d'attaque CAC, poursuite de la cible`);
+      return moveTowardTarget(u, nearestEnemy.x, nearestEnemy.y) ? { moved: true } : { moved: false };
+    } else {
+      // Pour les attaques à distance, rester sur place pendant le cooldown
+      const remainingCooldown = Math.ceil((attackCooldown - (now - u.lastAttackTime)) / 1000);
+      console.log(`Unité ${u.id} en cooldown d'attaque à distance (${remainingCooldown}s restantes)`);
+      return { moved: false };
+    }
   }
 }
 
