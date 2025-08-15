@@ -25,6 +25,7 @@ const state = {
   programs: {}, // key unitId -> number[] commands
   explosions: [], // { x, y, startTime, duration, particles: [{x, y, vx, vy, life}] }
   activeLasers: [], // { unitId, targetId, targetType, startTime, playerColor }
+  laserSparks: [], // { x, y, startTime, duration, particles: [{x, y, vx, vy, life, color}] }
   simIntervalId: null,
   animRafId: null,
   simRafId: null,
@@ -2789,6 +2790,9 @@ function drawExplosions(ctx, tile, ox, oy) {
   // Dessiner les lasers actifs
   drawActiveLasers(ctx, tile, ox, oy);
   
+  // Dessiner les étincelles de laser
+  drawLaserSparks(ctx, tile, ox, oy);
+  
   // Dessiner chaque explosion active
   for (const explosion of state.explosions) {
     const elapsed = now - explosion.startTime;
@@ -4089,8 +4093,98 @@ function drawActiveLasers(ctx, tile, ox, oy) {
     ctx.lineTo(screenToX, screenToY);
     ctx.stroke();
     
+    // Créer des étincelles à l'impact du laser sur la cible
+    createLaserSparks(screenToX, screenToY, laser.playerColor);
+    
     ctx.restore();
   }
+}
+
+// Dessine les étincelles de laser
+function drawLaserSparks(ctx, tile, ox, oy) {
+  const now = performance.now();
+  
+  // Nettoyer les étincelles terminées
+  state.laserSparks = state.laserSparks.filter(spark => {
+    const elapsed = now - spark.startTime;
+    return elapsed < spark.duration;
+  });
+  
+  // Dessiner chaque groupe d'étincelles actif
+  for (const spark of state.laserSparks) {
+    const elapsed = now - spark.startTime;
+    const progress = elapsed / spark.duration; // 0.0 à 1.0
+    
+    ctx.save();
+    
+    // Mettre à jour et dessiner chaque particule d'étincelle
+    for (const particle of spark.particles) {
+      // Mise à jour de la position
+      particle.x += particle.vx * tile * 0.01; // Vitesse très lente pour rester près de l'unité
+      particle.y += particle.vy * tile * 0.01;
+      particle.life = 1.0 - progress; // Diminue avec le temps
+      
+      if (particle.life > 0) {
+        // Position de la particule
+        const px = spark.x + particle.x * tile;
+        const py = spark.y + particle.y * tile;
+        
+        // Taille très petite basée sur la vie restante
+        const size = Math.max(0.3, tile * 0.03 * particle.life); // Très petites étincelles
+        const alpha = particle.life * 0.7; // Légèrement plus visibles
+        
+        // Couleur de l'étincelle en teintes orangées
+        const red = Math.floor(255 * Math.min(1, particle.life + 0.3));
+        const green = Math.floor(180 * particle.life);
+        const blue = Math.floor(50 * particle.life);
+        
+        ctx.fillStyle = `rgba(${red}, ${green}, ${blue}, ${alpha})`;
+        ctx.beginPath();
+        ctx.arc(px, py, size, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Ajouter un petit halo orangé
+        if (particle.life > 0.4) {
+          ctx.fillStyle = `rgba(255, 200, 100, ${alpha * 0.3})`;
+          ctx.beginPath();
+          ctx.arc(px, py, size * 1.1, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    }
+    
+    ctx.restore();
+  }
+}
+
+// Crée des étincelles discrètes à l'impact du laser
+function createLaserSparks(x, y, playerColor) {
+  const now = performance.now();
+  const duration = 300; // Durée encore plus courte
+  const particleCount = 3; // Moins de particules
+  const particles = [];
+  
+  // Créer les particules d'étincelles
+  for (let i = 0; i < particleCount; i++) {
+    const angle = (Math.PI * 2 * i) / particleCount + (Math.random() - 0.5) * 0.6;
+    const speed = 0.1 + Math.random() * 0.3; // Vitesse très faible pour rester près de l'unité
+    particles.push({
+      x: 0, // Position relative au centre
+      y: 0,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      life: 1.0, // 1.0 = vivant, 0.0 = mort
+      color: playerColor // Couleur du laser
+    });
+  }
+  
+  state.laserSparks.push({
+    x,
+    y,
+    startTime: now,
+    duration,
+    particles
+  });
 }
 
 // Crée une animation d'explosion réduite pour les attaques
