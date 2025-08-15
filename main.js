@@ -3575,10 +3575,10 @@ function renderSpawnPanel() {
     style: 'text-align:center;color:#9aa4b2;margin:8px 0;font-weight:600;' 
   });
   
-  // Titre "Usine à Robots"
+  // Titre "USINE À ROBOTS"
   const mainTitle = el('div', { 
-    textContent: 'Usine à Robots', 
-    style: 'text-align:center;color:#cfd6e6;font-size:16px;font-weight:600;margin-bottom:12px;position:relative;z-index:10;' 
+    textContent: 'USINE À ROBOTS', 
+    style: 'text-align:center;color:#cfd6e6;font-size:16px;font-weight:600;margin-bottom:12px;position:relative;z-index:10;text-shadow:0 0 8px rgba(255,255,255,0.6);' 
   });
   
   // BOX 1: Création d'unité
@@ -3609,7 +3609,7 @@ function renderSpawnPanel() {
   // Titre Modules (au-dessus des boxes)
   const moduleTitle = el('div', { 
     textContent: 'Modules', 
-    style: 'text-align:center;color:#cfd6e6;font-size:14px;font-weight:600;margin:12px 0 8px 0;' 
+    style: 'text-align:center;color:#cfd6e6;font-size:14px;font-weight:600;margin:12px 0 8px 0;text-decoration:underline;' 
   });
   
   // BOX 2: Module Mouvement
