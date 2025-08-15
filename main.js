@@ -737,6 +737,13 @@ function stepSimulation(dt = 0) {
     const cmds = state.programs[String(u.id)];
     if (!cmds || cmds.length === 0) continue;
     
+    // Traitement des nouvelles commandes conditionnelles et d'attaque
+    const processed = processAdvancedCommands(u, cmds);
+    if (processed) {
+      if (processed.moved) moved = true;
+      continue;
+    }
+    
     // Vérifier si l'unité peut se déplacer (a des modules de mouvement fonctionnels)
     if (!hasWorkingMovementModule(u)) {
       continue; // L'unité ne peut pas se déplacer
@@ -953,6 +960,354 @@ function moveTowardOrExploreInline(u, tx, ty) {
   updateRecentTrail(u, u.x, u.y);
   u.x = nx; u.y = ny; u.lastDir = step; if (u.knownFree) u.knownFree.add(`${u.x},${u.y}`);
   return true;
+}
+
+// Traite les commandes avancées (détection, conditionnelles, attaque)
+function processAdvancedCommands(u, cmds) {
+  // Nouvelles commandes:
+  // 5 = DETECTE (suivi de la cible à détecter)
+  // 11 = SI
+  // 15 = ALORS 
+  // 14 = SINON
+  // 12 = ROBOT_ENNEMIE
+  // 2 = ATTAQUE
+  
+  // Traiter les commandes dans l'ordre
+  
+  // D'abord vérifier s'il y a une structure SI...ALORS...SINON
+  const siIndex = cmds.indexOf(11); // SI
+  if (siIndex !== -1) {
+    return processConditionalCommand(u, cmds, siIndex);
+  }
+  
+  // Sinon, chercher une commande d'attaque directe (pas dans une condition)
+  if (cmds.includes(2)) {
+    return processAttackCommand(u);
+  }
+  
+  return null; // Aucune commande avancée trouvée
+}
+
+// Traite les commandes d'attaque
+function processAttackCommand(u) {
+  const nearestEnemy = findNearestEnemyUnit(u);
+  if (!nearestEnemy) {
+    console.log(`Unité ${u.id}: Aucun ennemi à attaquer`);
+    return { moved: false };
+  }
+  
+  // Calculer la distance
+  const distance = Math.abs(u.x - nearestEnemy.x) + Math.abs(u.y - nearestEnemy.y);
+  
+  // Si l'ennemi est adjacent (distance 1), attaquer
+  if (distance <= 1) {
+    const attackDamage = calculateAttackDamage(u);
+    if (attackDamage > 0) {
+      console.log(`Unité ${u.id} attaque l'unité ${nearestEnemy.id} pour ${attackDamage} dégâts`);
+      damageUnit(nearestEnemy, attackDamage);
+      
+      // Créer une petite explosion pour l'effet visuel
+      createExplosion(nearestEnemy.x, nearestEnemy.y);
+      
+      return { moved: false }; // L'attaque ne compte pas comme un mouvement
+    }
+  } else {
+    // Se déplacer vers l'ennemi
+    const moved = moveTowardTarget(u, nearestEnemy.x, nearestEnemy.y);
+    return { moved };
+  }
+  
+  return { moved: false };
+}
+
+// Traite les commandes conditionnelles (SI...ALORS...SINON)
+function processConditionalCommand(u, cmds, siIndex) {
+  // Structure attendue: [commandes préliminaires] SI condition ALORS action [SINON action]
+  const alorsIndex = cmds.indexOf(15); // ALORS
+  const sinonIndex = cmds.indexOf(14); // SINON
+  
+  console.log(`Unité ${u.id}: Traitement commandes conditionnelles:`, cmds);
+  
+  if (alorsIndex === -1) {
+    console.log(`Unité ${u.id}: Structure SI sans ALORS`);
+    return null;
+  }
+  
+  // D'abord, exécuter les commandes avant SI (comme l'exploration)
+  const commandesAvantSI = cmds.slice(0, siIndex);
+  console.log(`Unité ${u.id}: Commandes avant SI:`, commandesAvantSI);
+  
+  let hasMoved = false;
+  if (commandesAvantSI.length > 0) {
+    const resultPrelim = executeAction(u, commandesAvantSI);
+    console.log(`Unité ${u.id}: Résultat commandes préliminaires:`, resultPrelim);
+    hasMoved = resultPrelim && resultPrelim.moved;
+  }
+  
+  // Extraire la condition (entre SI et ALORS)
+  const condition = cmds.slice(siIndex + 1, alorsIndex);
+  console.log(`Unité ${u.id}: Condition à évaluer:`, condition);
+  
+  // Évaluer la condition
+  const conditionResult = evaluateCondition(u, condition);
+  console.log(`Unité ${u.id}: Résultat de la condition:`, conditionResult);
+  
+  let actionToExecute = [];
+  if (conditionResult) {
+    // Exécuter la partie ALORS
+    if (sinonIndex !== -1) {
+      actionToExecute = cmds.slice(alorsIndex + 1, sinonIndex);
+    } else {
+      actionToExecute = cmds.slice(alorsIndex + 1);
+    }
+  } else if (sinonIndex !== -1) {
+    // Exécuter la partie SINON
+    actionToExecute = cmds.slice(sinonIndex + 1);
+  } else {
+    // Pas de SINON et condition fausse : continuer les commandes préliminaires (explorer)
+    if (!hasMoved && commandesAvantSI.length > 0) {
+      console.log(`Unité ${u.id}: Condition fausse, continuation de l'exploration`);
+      actionToExecute = commandesAvantSI;
+    }
+  }
+  
+  // Exécuter l'action conditionnelle
+  console.log(`Unité ${u.id}: Action à exécuter:`, actionToExecute);
+  if (actionToExecute.length > 0) {
+    const result = executeAction(u, actionToExecute);
+    console.log(`Unité ${u.id}: Résultat de l'action:`, result);
+    return result;
+  }
+  
+  console.log(`Unité ${u.id}: Aucune action à exécuter`);
+  return { moved: false };
+}
+
+// Évalue une condition
+function evaluateCondition(u, condition) {
+  if (condition.length < 2) return false;
+  
+  const command = condition[0];
+  const target = condition[1];
+  
+  // 5 = DETECTE
+  if (command === 5) {
+    // 12 = ROBOT_ENNEMIE
+    if (target === 12) {
+      return detectEnemyUnit(u);
+    }
+    // 18 = QG (détection du QG)
+    if (target === 18) {
+      return detectHQ(u);
+    }
+  }
+  
+  return false;
+}
+
+// Détecte s'il y a un robot ennemi à proximité
+function detectEnemyUnit(u) {
+  const detectionRange = 3; // Portée de détection
+  const enemies = state.units.filter(unit => 
+    unit.ownerIndex !== u.ownerIndex &&
+    Math.abs(unit.x - u.x) <= detectionRange &&
+    Math.abs(unit.y - u.y) <= detectionRange
+  );
+  
+  return enemies.length > 0;
+}
+
+// Détecte s'il y a un QG à proximité
+function detectHQ(u) {
+  const detectionRange = 5; // Portée de détection pour les QG
+  const enemyHQs = state.hqs.filter(hq => 
+    hq.colorKey !== state.playerColors[u.ownerIndex] &&
+    Math.abs(hq.cx - u.x) <= detectionRange &&
+    Math.abs(hq.cy - u.y) <= detectionRange
+  );
+  
+  return enemyHQs.length > 0;
+}
+
+// Exécute une action donnée
+function executeAction(u, action) {
+  console.log(`Unité ${u.id}: Exécution de l'action:`, action);
+  
+  if (action.includes(2)) {
+    // Action d'attaque
+    return processAttackCommand(u);
+  }
+  
+  if (action.includes(6)) {
+    // Action d'exploration - utiliser la logique existante du jeu
+    console.log(`Unité ${u.id}: Tentative d'exploration`);
+    
+    // Vérifier si l'unité peut se déplacer
+    if (!hasWorkingMovementModule(u)) {
+      console.log(`Unité ${u.id}: Pas de module de mouvement fonctionnel`);
+      return { moved: false };
+    }
+    
+    const pm = state.playerMaps[u.ownerIndex];
+    if (!pm) {
+      console.log(`Unité ${u.id}: Pas de carte de joueur`);
+      return { moved: false };
+    }
+    
+    const k = `${u.x},${u.y}`;
+    pm.visitCounts.set(k, (pm.visitCounts.get(k) || 0) + 1);
+    
+    // Utiliser la même logique que dans la boucle principale d'exploration
+    const step = (function choose() {
+      const dirs = [ [1,0], [-1,0], [0,1], [0,-1], [1,1], [1,-1], [-1,1], [-1,-1] ];
+      const collect = (allowReverse) => {
+        const arr = [];
+        for (const d of dirs) {
+          if (!allowReverse && u.lastDir && d[0] === -u.lastDir[0] && d[1] === -u.lastDir[1]) continue;
+          const nx = u.x + d[0];
+          const ny = u.y + d[1];
+          if (!isInBounds(nx, ny)) continue;
+          if (pm.knownWalls && pm.knownWalls.has(`${nx},${ny}`)) continue;
+          const blocked = isBlocked(nx, ny);
+          if (blocked) { if (pm.knownWalls) pm.knownWalls.add(`${nx},${ny}`); continue; }
+          if (unitAt(nx, ny)) continue;
+          const key = `${nx},${ny}`;
+          const visits = (pm.visitCounts.get(key) || 0);
+          let score = visits + Math.random() * 0.1;
+          if (u.recentTrail && u.recentTrail.includes(key)) continue;
+          if (u.lastDir && d[0] === u.lastDir[0] && d[1] === u.lastDir[1]) score -= 0.15;
+          arr.push({ d, score });
+        }
+        return arr;
+      };
+      
+      let scored = collect(false);
+      if (scored.length === 0) {
+        if (u.lastDir) {
+          const d = [-u.lastDir[0], -u.lastDir[1]];
+          const nx = u.x + d[0], ny = u.y + d[1];
+          if (isInBounds(nx, ny) && !isBlocked(nx, ny) && !unitAt(nx, ny)) return d;
+        }
+        scored = collect(true);
+      }
+      if (scored.length === 0) return null;
+      scored.sort((a, b) => a.score - b.score);
+      const bestScore = scored[0].score;
+      const bests = scored.filter(s => Math.abs(s.score - bestScore) < 1e-6);
+      return bests[Math.floor(Math.random() * bests.length)].d;
+    })();
+    
+    if (step) {
+      const nx = u.x + step[0];
+      const ny = u.y + step[1];
+      const now = performance.now();
+      const speedModifier = getSpeedModifier(u);
+      const baseDuration = Math.max(120, Math.floor(1000 / state.unitSpeedTilesPerSec));
+      const tileDuration = speedModifier > 0 ? Math.floor(baseDuration / speedModifier) : baseDuration * 10;
+      u.anim = { fromX: u.x, fromY: u.y, toX: nx, toY: ny, startTime: now, endTime: now + tileDuration };
+      const ang = Math.atan2(ny - u.y, nx - u.x);
+      u.headingFrom = (u.headingTo ?? ang);
+      u.headingTo = ang;
+      u.headingStart = now; u.headingEnd = now + tileDuration;
+      updateRecentTrail(u, u.x, u.y);
+      u.x = nx; u.y = ny; u.lastDir = step;
+      if (pm.knownFree) pm.knownFree.add(`${u.x},${u.y}`);
+      console.log(`Unité ${u.id}: Exploration réussie vers (${nx}, ${ny})`);
+      return { moved: true };
+    } else {
+      console.log(`Unité ${u.id}: Aucune direction d'exploration trouvée`);
+      return { moved: false };
+    }
+  }
+  
+  console.log(`Unité ${u.id}: Action inconnue:`, action);
+  return { moved: false };
+}
+
+// Trouve l'unité ennemie la plus proche
+function findNearestEnemyUnit(u) {
+  const enemies = state.units.filter(unit => unit.ownerIndex !== u.ownerIndex);
+  if (enemies.length === 0) return null;
+  
+  let nearest = null;
+  let minDistance = Infinity;
+  
+  for (const enemy of enemies) {
+    const distance = Math.abs(u.x - enemy.x) + Math.abs(u.y - enemy.y);
+    if (distance < minDistance) {
+      minDistance = distance;
+      nearest = enemy;
+    }
+  }
+  
+  return nearest;
+}
+
+// Calcule les dégâts d'attaque basés sur les modules d'attaque
+function calculateAttackDamage(u) {
+  if (!u.modules || u.modules.length === 0) return 0;
+  
+  const attackModules = u.modules.filter(m => m.type === 'attack' && m.hp > 0);
+  return attackModules.length * 30; // 30 dégâts par module d'attaque
+}
+
+// Déplace une unité vers une cible
+function moveTowardTarget(u, targetX, targetY) {
+  if (!hasWorkingMovementModule(u)) return false;
+  
+  const moved = moveTowardOrExploreInline(u, targetX, targetY);
+  return moved;
+}
+
+// Exécute l'action d'exploration
+function executeExploreAction(u) {
+  const pm = state.playerMaps[u.ownerIndex];
+  if (!pm) return { moved: false };
+  
+  const k = `${u.x},${u.y}`;
+  pm.visitCounts.set(k, (pm.visitCounts.get(k) || 0) + 1);
+  
+  // Utiliser la logique d'exploration existante simplifiée
+  const dirs = [ [1,0], [-1,0], [0,1], [0,-1], [1,1], [1,-1], [-1,1], [-1,-1] ];
+  let bestMove = null;
+  let bestScore = Infinity;
+  
+  for (const d of dirs) {
+    const nx = u.x + d[0];
+    const ny = u.y + d[1];
+    if (!isInBounds(nx, ny)) continue;
+    if (isBlocked(nx, ny)) continue;
+    if (unitAt(nx, ny)) continue;
+    
+    const key = `${nx},${ny}`;
+    if (u.recentTrail && u.recentTrail.includes(key)) continue;
+    
+    const visits = (pm.visitCounts.get(key) || 0);
+    if (visits < bestScore) {
+      bestScore = visits;
+      bestMove = d;
+    }
+  }
+  
+  if (bestMove) {
+    const nx = u.x + bestMove[0];
+    const ny = u.y + bestMove[1];
+    const now = performance.now();
+    const speedModifier = getSpeedModifier(u);
+    const baseDuration = Math.max(120, Math.floor(1000 / state.unitSpeedTilesPerSec));
+    const tileDuration = speedModifier > 0 ? Math.floor(baseDuration / speedModifier) : baseDuration * 10;
+    u.anim = { fromX: u.x, fromY: u.y, toX: nx, toY: ny, startTime: now, endTime: now + tileDuration };
+    const ang = Math.atan2(ny - u.y, nx - u.x);
+    u.headingFrom = (u.headingTo ?? ang);
+    u.headingTo = ang;
+    u.headingStart = now; u.headingEnd = now + tileDuration;
+    updateRecentTrail(u, u.x, u.y);
+    u.x = nx; u.y = ny; u.lastDir = bestMove;
+    if (pm.knownFree) pm.knownFree.add(`${u.x},${u.y}`);
+    return { moved: true };
+  }
+  
+  return { moved: false };
 }
 
 // Planifie un pas vers le QG en utilisant la cartographie partagée (connue du joueur).
