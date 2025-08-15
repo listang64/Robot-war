@@ -30,7 +30,7 @@ const state = {
   // Cartographie partagée par joueur
   playerMaps: [],
   // Sélection de modules pour la création d'unités
-  selectedModules: { movement: 0, shield: 0 }, // index -> { knownWalls:Set<string>, knownFree:Set<string>, visitCounts:Map<string,number> }
+  selectedModules: { movement: 0, shield: 0, attack: 0 }, // index -> { knownWalls:Set<string>, knownFree:Set<string>, visitCounts:Map<string,number> }
   nextUnitId: 1,
   nextLocalIdByPlayer: [],
   lastSimTime: 0,
@@ -453,6 +453,7 @@ function nextPlayer() {
   // Remet à zéro les compteurs de modules pour le nouveau joueur
   state.selectedModules.movement = 0;
   state.selectedModules.shield = 0;
+  state.selectedModules.attack = 0;
   updateModuleDisplay();
   updateEnergyCost();
   // Met à jour la couleur du bouton de programmation
@@ -1956,7 +1957,7 @@ function renderSpawnPanel() {
   const creationBox = el('div', { className: 'unit-card', style: 'margin-bottom:12px;' });
   
   const createLine = el('div', { 
-    style: 'display:flex;align-items:center;justify-content:space-between;padding:16px 24px;gap:20px;' 
+    style: 'display:flex;align-items:center;justify-content:space-between;padding:12px 24px;gap:20px;' 
   });
   const btn = button('Créer', () => spawnUnit());
   btn.id = 'createBtn'; // Ajouter un ID pour pouvoir le retrouver
@@ -1984,11 +1985,11 @@ function renderSpawnPanel() {
   });
   
   // BOX 2: Module Mouvement
-  const movementBox = el('div', { className: 'unit-card', style: 'margin-bottom:8px;' });
+  const movementBox = el('div', { className: 'unit-card', style: 'margin-bottom:6px;' });
   
   // Module Mouvement avec tout aligné horizontalement
   const moduleLine = el('div', { 
-    style: 'display:flex;align-items:center;justify-content:space-between;padding:14px 20px;gap:16px;' 
+    style: 'display:flex;align-items:center;justify-content:space-between;padding:12px 20px;gap:16px;' 
   });
   
   // Container pour Mouvement + coût (à gauche)
@@ -2047,10 +2048,10 @@ function renderSpawnPanel() {
   movementBox.append(moduleLine);
   
   // BOX 3: Module Armure
-  const armorBox = el('div', { className: 'unit-card' });
+  const armorBox = el('div', { className: 'unit-card', style: 'margin-bottom:6px;' });
   
   const armorLine = el('div', { 
-    style: 'display:flex;align-items:center;justify-content:space-between;padding:14px 20px;gap:16px;' 
+    style: 'display:flex;align-items:center;justify-content:space-between;padding:12px 20px;gap:16px;' 
   });
   
   // Container pour Armure + coût (à gauche)
@@ -2062,7 +2063,7 @@ function renderSpawnPanel() {
     style: 'font-size:15px;color:#cfd6e6;margin-bottom:4px;font-weight:600;' 
   });
   const shieldCost = el('span', { 
-    textContent: '75', 
+    textContent: '150', 
     style: 'color:#ffd54a;font-size:14px;font-weight:800;' 
   });
   armorLabelContainer.append(shieldLabel, shieldCost);
@@ -2108,9 +2109,72 @@ function renderSpawnPanel() {
   });
 
   armorBox.append(armorLine);
+
+  // BOX 4: Module Attaque
+  const attackBox = el('div', { className: 'unit-card' });
+  
+  const attackLine = el('div', { 
+    style: 'display:flex;align-items:center;justify-content:space-between;padding:12px 20px;gap:16px;' 
+  });
+  
+  // Container pour Attaque + coût (à gauche)
+  const attackLabelContainer = el('div', { 
+    style: 'display:flex;flex-direction:column;align-items:center;' 
+  });
+  const attackLabel = el('span', { 
+    textContent: 'Attaque C.A.C', 
+    style: 'font-size:15px;color:#cfd6e6;margin-bottom:4px;font-weight:600;' 
+  });
+  const attackCost = el('span', { 
+    textContent: '80', 
+    style: 'color:#ffd54a;font-size:14px;font-weight:800;' 
+  });
+  attackLabelContainer.append(attackLabel, attackCost);
+  
+  // Container pour les contrôles (à droite)
+  const attackControlsContainer = el('div', { 
+    style: 'display:flex;align-items:center;gap:6px;' 
+  });
+  
+  const attackCount = el('div', { 
+    id: 'attackCount',
+    textContent: '0', 
+    style: 'background:#6b7280;color:#fff;border-radius:4px;padding:3px 6px;font-size:11px;min-width:20px;text-align:center;font-weight:600;' 
+  });
+  const attackMinus = el('button', { 
+    textContent: '−',
+    style: 'width:20px;height:20px;border-radius:4px;border:1px solid #4b5563;background:#374151;color:#fff;font-size:12px;font-weight:600;display:flex;align-items:center;justify-content:center;cursor:pointer;' 
+  });
+  const attackPlus = el('button', { 
+    textContent: '+',
+    style: 'width:20px;height:20px;border-radius:4px;border:1px solid #4b5563;background:#374151;color:#fff;font-size:12px;font-weight:600;display:flex;align-items:center;justify-content:center;cursor:pointer;' 
+  });
+  
+  attackControlsContainer.append(attackCount, attackMinus, attackPlus);
+  attackLine.append(attackLabelContainer, attackControlsContainer);
+  
+  // Event listeners pour Attaque
+  attackPlus.addEventListener('click', () => {
+    const total = getTotalModules();
+    if (total < 10) {
+      state.selectedModules.attack++;
+      updateModuleDisplay();
+      updateEnergyCost();
+    }
+  });
+  
+  attackMinus.addEventListener('click', () => {
+    if (state.selectedModules.attack > 0) {
+      state.selectedModules.attack--;
+      updateModuleDisplay();
+      updateEnergyCost();
+    }
+  });
+
+  attackBox.append(attackLine);
   
   const list = el('div', { className: 'unit-list' });
-  list.append(creationBox, moduleTitle, movementBox, armorBox);
+  list.append(creationBox, moduleTitle, movementBox, armorBox, attackBox);
   panel.append(separator, mainTitle, list);
   // init texte PV et coût énergie
   updateHqHpLine();
@@ -2168,7 +2232,17 @@ function createExplosion(tileX, tileY) {
 function damageUnit(unit, damage) {
   if (!unit.modules || unit.modules.length === 0) return;
   
-  let remainingDamage = damage;
+  // Vérifier s'il y a des boucliers fonctionnels pour la réduction de dégâts
+  const workingShields = unit.modules.filter(m => m.type === 'shield' && m.hp > 0);
+  let actualDamage = damage;
+  
+  // Si il y a des boucliers fonctionnels, réduire les dégâts de 20%
+  if (workingShields.length > 0) {
+    actualDamage = Math.floor(damage * 0.8);
+    console.log(`Dégâts réduits de 20% grâce aux boucliers: ${damage} → ${actualDamage}`);
+  }
+  
+  let remainingDamage = actualDamage;
   
   // Phase 1: Endommager les boucliers en priorité
   const shields = unit.modules.filter(m => m.type === 'shield' && m.hp > 0);
@@ -2236,6 +2310,10 @@ function updateModuleDisplay() {
   if (shieldCount) {
     shieldCount.textContent = state.selectedModules.shield.toString();
   }
+  const attackCount = q('#attackCount');
+  if (attackCount) {
+    attackCount.textContent = state.selectedModules.attack.toString();
+  }
 }
 
 function updateEnergyCost() {
@@ -2277,7 +2355,7 @@ function updateCreateButtonState() {
 }
 
 function calculateUnitCost() {
-  return state.selectedModules.movement * 50 + state.selectedModules.shield * 75; // 50 énergie par module de mouvement, 75 par module de bouclier
+  return state.selectedModules.movement * 50 + state.selectedModules.shield * 150 + state.selectedModules.attack * 80; // 50 énergie par module de mouvement, 150 par module de bouclier, 80 par module d'attaque
 }
 
 function updateHqHpLine() {
@@ -2477,6 +2555,7 @@ function spawnUnit() {
   // Reset la sélection de modules après création
   state.selectedModules.movement = 0;
   state.selectedModules.shield = 0;
+  state.selectedModules.attack = 0;
   updateModuleDisplay();
   updateEnergyCost();
   updateHqHpLine(); // Mettre à jour l'affichage de l'énergie du QG
@@ -2521,6 +2600,9 @@ function spawnUnitFromHQ(hq, ownerIndex, offsetIdx = 0) {
         }
         for (let i = 0; i < state.selectedModules.shield; i++) {
           modules.push({ type: 'shield', hp: 100, maxHp: 100 });
+        }
+        for (let i = 0; i < state.selectedModules.attack; i++) {
+          modules.push({ type: 'attack', hp: 100, maxHp: 100 });
         }
       } else { // Unités initiales (spawn automatique au début)
         // Une unité initiale basique sans module
@@ -2676,6 +2758,9 @@ function drawModuleRing(ctx, u, cx, cy, r, ringW) {
               break;
             case 'shield':
               moduleColor = '#1e90ff'; // Bleu vif pour bouclier
+              break;
+            case 'attack':
+              moduleColor = '#ff0000'; // Rouge pour attaque
               break;
             default:
               moduleColor = '#6b7280';
