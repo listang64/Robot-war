@@ -30,7 +30,7 @@ const state = {
   // Cartographie partagée par joueur
   playerMaps: [],
   // Sélection de modules pour la création d'unités
-  selectedModules: { movement: 0, shield: 0, attack: 0 }, // index -> { knownWalls:Set<string>, knownFree:Set<string>, visitCounts:Map<string,number> }
+  selectedModules: { movement: 0, shield: 0, attack: 0, ranged_attack: 0 }, // index -> { knownWalls:Set<string>, knownFree:Set<string>, visitCounts:Map<string,number> }
   nextUnitId: 1,
   nextLocalIdByPlayer: [],
   lastSimTime: 0,
@@ -236,6 +236,14 @@ function renderGame() {
     b.addEventListener('click', () => selectDevSpawn('unit', col));
     devList.append(b);
   }
+  
+  // Bouton spécial: Unité rouge avec 2 modules de déplacement
+  const redUnitBtn = el('button', { className: 'dev-special', title: 'Unité rouge 2 mouvements' });
+  redUnitBtn.textContent = 'Rouge 2M';
+  redUnitBtn.style.backgroundColor = '#ff4444';
+  redUnitBtn.style.color = 'white';
+  redUnitBtn.addEventListener('click', () => selectDevSpawn('unit_2movement', 'red'));
+  devList.append(redUnitBtn);
   // --- Bouton: -100 PV au QG du joueur courant ---
   const dmgBtn = el('button', { className: 'dev-dmg', title: '-100 PV QG actif' });
   dmgBtn.textContent = '-100 PV QG';
@@ -454,6 +462,7 @@ function nextPlayer() {
   state.selectedModules.movement = 0;
   state.selectedModules.shield = 0;
   state.selectedModules.attack = 0;
+  state.selectedModules.ranged_attack = 0;
   updateModuleDisplay();
   updateEnergyCost();
   // Met à jour la couleur du bouton de programmation
@@ -646,19 +655,30 @@ document.addEventListener('click', (e) => {
   const ownerIndex = Math.max(0, state.playerColors.indexOf(devSpawnSelection.colorKey));
   const idNum = state.nextUnitId++;
   // Les unités créées via le développeur ont des modules prédéfinis
-  const modules = [
-    // 4 modules de mouvement
-    { type: 'movement', hp: 100, maxHp: 100 },
-    { type: 'movement', hp: 100, maxHp: 100 },
-    { type: 'movement', hp: 100, maxHp: 100 },
-    { type: 'movement', hp: 100, maxHp: 100 },
-    // 2 modules de bouclier
-    { type: 'shield', hp: 100, maxHp: 100 },
-    { type: 'shield', hp: 100, maxHp: 100 },
-    // 2 modules d'attaque
-    { type: 'attack', hp: 100, maxHp: 100 },
-    { type: 'attack', hp: 100, maxHp: 100 }
-  ];
+  let modules = [];
+  
+  if (devSpawnSelection.type === 'unit_2movement') {
+    // Unité spéciale avec seulement 2 modules de mouvement
+    modules = [
+      { type: 'movement', hp: 100, maxHp: 100 },
+      { type: 'movement', hp: 100, maxHp: 100 }
+    ];
+  } else {
+    // Unité normale avec modules complets
+    modules = [
+      // 4 modules de mouvement
+      { type: 'movement', hp: 100, maxHp: 100 },
+      { type: 'movement', hp: 100, maxHp: 100 },
+      { type: 'movement', hp: 100, maxHp: 100 },
+      { type: 'movement', hp: 100, maxHp: 100 },
+      // 2 modules de bouclier
+      { type: 'shield', hp: 100, maxHp: 100 },
+      { type: 'shield', hp: 100, maxHp: 100 },
+      // 2 modules d'attaque
+      { type: 'attack', hp: 100, maxHp: 100 },
+      { type: 'attack', hp: 100, maxHp: 100 }
+    ];
+  }
   state.units.push({ id: idNum, ownerIndex, x: gx, y: gy, hp: 1, modules: modules, recentTrail: [], lastDir: null, anim: null, lastAttackTime: null });
   
   // Ajouter la position de spawn à la connaissance du joueur
@@ -1196,38 +1216,140 @@ function processAdvancedCommands(u, cmds) {
   return null; // Aucune commande avancée trouvée
 }
 
+// Fonction pour fuir un ennemi
+function fleeFromEnemy(u, enemy) {
+  const dirs = [[1,0], [-1,0], [0,1], [0,-1], [1,1], [1,-1], [-1,1], [-1,-1]];
+  let bestDir = null;
+  let maxDistance = -1;
+
+  for (const [dx, dy] of dirs) {
+    const nx = u.x + dx;
+    const ny = u.y + dy;
+    
+    if (isInBounds(nx, ny) && !isBlocked(nx, ny) && !unitAt(nx, ny)) {
+      const newDistance = Math.abs(nx - enemy.x) + Math.abs(ny - enemy.y);
+      if (newDistance > maxDistance) {
+        maxDistance = newDistance;
+        bestDir = [dx, dy];
+      }
+    }
+  }
+
+  if (bestDir) {
+    const [dx, dy] = bestDir;
+    const nx = u.x + dx;
+    const ny = u.y + dy;
+    console.log(`Unité ${u.id}: Fuite vers (${nx}, ${ny})`);
+    
+    // Créer l'animation de mouvement
+    const now = performance.now();
+    const speedModifier = getSpeedModifier(u);
+    const baseDuration = Math.max(120, Math.floor(1000 / state.unitSpeedTilesPerSec));
+    const tileDuration = speedModifier > 0 ? Math.floor(baseDuration / speedModifier) : baseDuration * 10;
+    
+    u.anim = { fromX: u.x, fromY: u.y, toX: nx, toY: ny, startTime: now, endTime: now + tileDuration };
+    const ang = Math.atan2(ny - u.y, nx - u.x);
+    u.headingFrom = (u.headingTo ?? ang);
+    u.headingTo = ang;
+    u.headingStart = now; u.headingEnd = now + tileDuration;
+    
+    updateRecentTrail(u, u.x, u.y);
+    u.x = nx; u.y = ny; u.lastDir = [dx, dy];
+    
+    // Mettre à jour la connaissance du joueur
+    const pm = state.playerMaps[u.ownerIndex];
+    if (pm && pm.knownFree) pm.knownFree.add(`${u.x},${u.y}`);
+    
+    return { moved: true };
+  }
+
+  console.log(`Unité ${u.id}: Impossible de fuir, reste sur place`);
+  return { moved: false };
+}
+
 // Traite les commandes d'attaque
 function processAttackCommand(u) {
-  const nearestEnemy = findNearestEnemyUnit(u);
+  // Vérifier d'abord si l'unité a des modules d'attaque à distance
+  const hasRangedAttack = u.modules && u.modules.some(m => m.type === 'ranged_attack' && m.hp > 0);
+  const hasMeleeAttack = u.modules && u.modules.some(m => m.type === 'attack' && m.hp > 0);
+  
+  // Si unité distance-seulement, vérifier si elle doit fuir d'abord
+  if (hasRangedAttack && !hasMeleeAttack) {
+    const threatEnemy = findNearestEnemyUnit(u);
+    if (threatEnemy && threatEnemy.type === 'unit') {
+      const threatDistance = Math.abs(u.x - threatEnemy.x) + Math.abs(u.y - threatEnemy.y);
+      if (threatDistance <= 2) { // Unité ennemie trop proche
+        console.log(`Unité ${u.id}: Unité ennemie à ${threatDistance} cases, fuite prioritaire`);
+        return fleeFromEnemy(u, threatEnemy);
+      }
+    }
+  }
+  
+  let nearestEnemy = null;
+  let attackType = null;
+  
+  if (hasRangedAttack) {
+    // Chercher d'abord des ennemis à portée d'attaque à distance (5 cases)
+    nearestEnemy = findNearestEnemyUnitInRange(u, 5);
+    if (nearestEnemy) {
+      attackType = 'ranged';
+      console.log(`Unité ${u.id}: Cible à distance trouvée: ${nearestEnemy.type} à (${nearestEnemy.x}, ${nearestEnemy.y})`);
+    }
+  }
+  
+  if (!nearestEnemy && hasMeleeAttack) {
+    // Si pas d'ennemi à distance ou pas de module à distance, chercher en C.A.C
+    nearestEnemy = findNearestEnemyUnit(u);
+    if (nearestEnemy) {
+      const distance = Math.abs(u.x - nearestEnemy.x) + Math.abs(u.y - nearestEnemy.y);
+      // Vérifier si à portée C.A.C
+      if (nearestEnemy.type === 'unit' && distance <= 1) {
+        attackType = 'melee';
+      } else if (nearestEnemy.type === 'hq' && distance <= HQ_PERIM_RADIUS) {
+        attackType = 'melee';
+      } else {
+        nearestEnemy = null; // Pas à portée C.A.C
+      }
+    }
+  }
+  
+  // Si unité a seulement attaque à distance et ennemi trop proche, fuir
+  if (!nearestEnemy && hasRangedAttack && !hasMeleeAttack) {
+    const closeEnemy = findNearestEnemyUnit(u);
+    if (closeEnemy) {
+      const distance = Math.abs(u.x - closeEnemy.x) + Math.abs(u.y - closeEnemy.y);
+      console.log(`Unité ${u.id}: Ennemi proche détecté: ${closeEnemy.type} à distance ${distance}`);
+      
+      // Fuir si ennemi trop proche (unités: 2 cases, QG: 3 cases)
+      const fleeDistance = closeEnemy.type === 'unit' ? 2 : 3;
+      if (distance <= fleeDistance) {
+        console.log(`Unité ${u.id}: ${closeEnemy.type} ennemi trop proche (${distance}), fuite pour maintenir distance`);
+        return fleeFromEnemy(u, closeEnemy);
+      }
+    }
+  }
+
   if (!nearestEnemy) {
-    console.log(`Unité ${u.id}: Aucun ennemi à attaquer, retour à l'exploration`);
-    // Si pas d'ennemi, retourner à l'exploration
+    // Chercher des ennemis plus loin pour les suivre
+    const distantEnemy = findNearestEnemyUnit(u);
+    if (distantEnemy) {
+      console.log(`Unité ${u.id}: Ennemi hors portée, poursuite de la cible`);
+      return moveTowardTarget(u, distantEnemy.x, distantEnemy.y) ? { moved: true } : { moved: false };
+    }
+    
+    console.log(`Unité ${u.id}: Aucun ennemi à portée d'attaque, retour à l'exploration`);
     return executeExploreAction(u);
   }
   
-  // Calculer la distance
-  const distance = Math.abs(u.x - nearestEnemy.x) + Math.abs(u.y - nearestEnemy.y);
-  
-  // Vérifier si l'ennemi est à portée d'attaque
-  let canAttack = false;
-  
-  if (nearestEnemy.type === 'unit') {
-    // Pour les unités : distance 1 (adjacent)
-    canAttack = distance <= 1;
-  } else if (nearestEnemy.type === 'hq') {
-    // Pour les QG : distance au périmètre du QG (HQ_PERIM_RADIUS = 5)
-    canAttack = distance <= HQ_PERIM_RADIUS;
-    console.log(`Unité ${u.id} distance au QG: ${distance}, périmètre: ${HQ_PERIM_RADIUS}, peut attaquer: ${canAttack}`);
-  }
-  
-  if (canAttack) {
-    const now = performance.now();
-    const attackCooldown = 1000; // 1 seconde entre les attaques
+  // Attaquer avec le type approprié
+  const now = performance.now();
+  const attackCooldown = 1000; // 1 seconde entre les attaques
     
-    // Vérifier si assez de temps s'est écoulé depuis la dernière attaque
-    if (!u.lastAttackTime || (now - u.lastAttackTime) >= attackCooldown) {
-      const attackDamage = calculateAttackDamage(u);
-      console.log(`Unité ${u.id}: Calcul dégâts d'attaque = ${attackDamage}`);
+  // Vérifier si assez de temps s'est écoulé depuis la dernière attaque
+  if (!u.lastAttackTime || (now - u.lastAttackTime) >= attackCooldown) {
+    const isRangedAttack = attackType === 'ranged';
+    const attackDamage = calculateAttackDamage(u, isRangedAttack);
+    console.log(`Unité ${u.id}: ${isRangedAttack ? 'Attaque à distance' : 'Attaque C.A.C'} = ${attackDamage} dégâts`);
       if (attackDamage > 0) {
         if (nearestEnemy.type === 'unit') {
           // Attaquer une unité
@@ -1235,15 +1357,22 @@ function processAttackCommand(u) {
           damageUnit(nearestEnemy.target, attackDamage);
         } else if (nearestEnemy.type === 'hq') {
           // Attaquer un QG
-          console.log(`Unité ${u.id} attaque le QG ${nearestEnemy.target.colorKey} pour ${attackDamage} dégâts (distance: ${distance})`);
+          const distanceToHQ = Math.abs(u.x - nearestEnemy.target.cx) + Math.abs(u.y - nearestEnemy.target.cy);
+          console.log(`Unité ${u.id} attaque le QG ${nearestEnemy.target.colorKey} pour ${attackDamage} dégâts (distance: ${distanceToHQ})`);
           damageHQ(nearestEnemy.target, attackDamage);
         }
         
         // Enregistrer le temps de cette attaque
         u.lastAttackTime = now;
         
-        // Créer une petite explosion pour l'effet visuel
-        createAttackExplosion(nearestEnemy.x, nearestEnemy.y);
+        // Créer l'animation appropriée
+        if (isRangedAttack) {
+          // Animation laser pour attaque à distance
+          createLaserAnimation(u.x, u.y, nearestEnemy.x, nearestEnemy.y, state.playerColors[u.ownerIndex]);
+        } else {
+          // Animation explosion pour attaque C.A.C
+          createAttackExplosion(nearestEnemy.x, nearestEnemy.y);
+        }
         
         return { moved: false }; // L'attaque ne compte pas comme un mouvement
       } else {
@@ -1251,20 +1380,12 @@ function processAttackCommand(u) {
         console.log(`Unité ${u.id}: Plus de modules d'attaque, retour à l'exploration`);
         return executeExploreAction(u);
       }
-    } else {
-      // En attente du cooldown, ne pas bouger
-      const remainingCooldown = Math.ceil((attackCooldown - (now - u.lastAttackTime)) / 1000);
-      console.log(`Unité ${u.id} en cooldown d'attaque (${remainingCooldown}s restantes)`);
-      return { moved: false };
-    }
   } else {
-    // Se déplacer vers l'ennemi
-    console.log(`Unité ${u.id} se déplace vers ${nearestEnemy.type} (distance: ${distance})`);
-    const moved = moveTowardTarget(u, nearestEnemy.x, nearestEnemy.y);
-    return { moved };
+    // En attente du cooldown, ne pas bouger
+    const remainingCooldown = Math.ceil((attackCooldown - (now - u.lastAttackTime)) / 1000);
+    console.log(`Unité ${u.id} en cooldown d'attaque (${remainingCooldown}s restantes)`);
+    return { moved: false };
   }
-  
-  return { moved: false };
 }
 
 // Vérifie si une unité est en train d'attaquer un QG
@@ -1284,9 +1405,9 @@ function isUnitAttacking(u) {
   const distance = Math.abs(u.x - nearestEnemy.x) + Math.abs(u.y - nearestEnemy.y);
   
   if (nearestEnemy.type === 'hq') {
-    return distance <= HQ_PERIM_RADIUS; // Attaque QG
+    return distance <= 8; // Attaque QG - zone élargie
   } else {
-    return distance <= 3; // Attaque unité - plus large que la portée d'attaque pour inclure l'approche
+    return distance <= 6; // Attaque unité - zone élargie
   }
 }
 
@@ -1389,7 +1510,7 @@ function evaluateCondition(u, condition) {
 
 // Détecte s'il y a une unité ennemie (robot ou QG) à proximité
 function detectEnemyUnit(u) {
-  const detectionRange = 4; // Portée de détection (augmentée de 1)
+  const detectionRange = 6; // Portée de détection élargie pour QG
   
   // Détecter les unités ennemies
   const enemyUnits = state.units.filter(unit => 
@@ -1445,7 +1566,7 @@ function executeAction(u, action) {
   }
   
   if (action.includes(6)) {
-    // Action d'exploration - utiliser la logique existante du jeu
+    // Action d'exploration explicite
     console.log(`Unité ${u.id}: Tentative d'exploration`);
     
     // Vérifier si l'unité peut se déplacer
@@ -1613,6 +1734,36 @@ function executeAction(u, action) {
   
   console.log(`Unité ${u.id}: Action inconnue:`, action);
   return { moved: false };
+}
+
+// Trouve la cible ennemie la plus proche pour attaque à distance (portée 3)
+function findNearestEnemyUnitInRange(u, maxRange = 5) {
+  let nearest = null;
+  let minDistance = Infinity;
+  
+  // Chercher parmi les unités ennemies dans la portée
+  const enemies = state.units.filter(unit => unit.ownerIndex !== u.ownerIndex);
+  for (const enemy of enemies) {
+    const distance = Math.abs(u.x - enemy.x) + Math.abs(u.y - enemy.y);
+    if (distance <= maxRange && distance < minDistance) {
+      minDistance = distance;
+      nearest = { type: 'unit', target: enemy, x: enemy.x, y: enemy.y };
+    }
+  }
+  
+  // Chercher parmi les QG ennemis dans la portée
+  const enemyHQs = state.hqs.filter(hq => hq.colorKey !== state.playerColors[u.ownerIndex]);
+  for (const hq of enemyHQs) {
+    const distance = Math.abs(u.x - hq.cx) + Math.abs(u.y - hq.cy);
+    console.log(`Unité ${u.id}: QG ${hq.colorKey} à (${hq.cx}, ${hq.cy}), distance ${distance}, maxRange ${maxRange}`);
+    if (distance <= maxRange && distance < minDistance) {
+      minDistance = distance;
+      nearest = { type: 'hq', target: hq, x: hq.cx, y: hq.cy };
+      console.log(`Unité ${u.id}: QG ${hq.colorKey} sélectionné comme cible à distance`);
+    }
+  }
+  
+  return nearest;
 }
 
 // Trouve la cible ennemie la plus proche (unité ou QG)
@@ -2072,15 +2223,21 @@ function findNearestDiscoveredEnemyHQ(u) {
 }
 
 // Calcule les dégâts d'attaque basés sur les modules d'attaque
-function calculateAttackDamage(u) {
+function calculateAttackDamage(u, isRanged = false) {
   if (!u.modules || u.modules.length === 0) {
     console.log(`Unité ${u.id}: Aucun module`);
     return 0;
   }
   
-  const attackModules = u.modules.filter(m => m.type === 'attack' && m.hp > 0);
-  console.log(`Unité ${u.id}: ${attackModules.length} modules d'attaque fonctionnels`);
-  return attackModules.length * 30; // 30 dégâts par module d'attaque
+  if (isRanged) {
+    const rangedAttackModules = u.modules.filter(m => m.type === 'ranged_attack' && m.hp > 0);
+    console.log(`Unité ${u.id}: ${rangedAttackModules.length} modules d'attaque à distance fonctionnels`);
+    return rangedAttackModules.length * 10; // 10 dégâts par module d'attaque à distance
+  } else {
+    const attackModules = u.modules.filter(m => m.type === 'attack' && m.hp > 0);
+    console.log(`Unité ${u.id}: ${attackModules.length} modules d'attaque C.A.C fonctionnels`);
+    return attackModules.length * 30; // 30 dégâts par module d'attaque C.A.C
+  }
 }
 
 // Applique des dégâts à un QG
@@ -2601,6 +2758,48 @@ function drawExplosions(ctx, tile, ox, oy) {
     const elapsed = now - explosion.startTime;
     const progress = elapsed / explosion.duration; // 0.0 à 1.0
     
+    if (explosion.type === 'laser') {
+      // Rendu spécial pour les lasers
+      const fromX = ox + explosion.fromX * tile + tile / 2;
+      const fromY = oy + explosion.fromY * tile + tile / 2;
+      const toX = ox + explosion.toX * tile + tile / 2;
+      const toY = oy + explosion.toY * tile + tile / 2;
+      
+      ctx.save();
+      
+      // Couleur du laser basée sur la couleur du joueur
+      const playerColor = colorFromKey(explosion.playerColor);
+      
+      // Effet de fondu (apparition puis disparition)
+      const alpha = progress < 0.3 ? progress / 0.3 : (1 - progress) / 0.7;
+      
+      // Dessiner le laser principal
+      ctx.strokeStyle = playerColor;
+      ctx.globalAlpha = alpha;
+      ctx.lineWidth = 3;
+      ctx.lineCap = 'round';
+      
+      ctx.beginPath();
+      ctx.moveTo(fromX, fromY);
+      ctx.lineTo(toX, toY);
+      ctx.stroke();
+      
+      // Effet de lueur
+      ctx.shadowColor = playerColor;
+      ctx.shadowBlur = 8;
+      ctx.lineWidth = 1;
+      ctx.globalAlpha = alpha * 0.5;
+      
+      ctx.beginPath();
+      ctx.moveTo(fromX, fromY);
+      ctx.lineTo(toX, toY);
+      ctx.stroke();
+      
+      ctx.restore();
+      continue;
+    }
+    
+    // Rendu normal pour les explosions
     const centerX = ox + explosion.tileX * tile + tile / 2;
     const centerY = oy + explosion.tileY * tile + tile / 2;
     
@@ -3543,9 +3742,72 @@ function renderSpawnPanel() {
   });
 
   attackBox.append(attackLine);
+
+  // BOX 5: Module Attaque à distance
+  const rangedAttackBox = el('div', { className: 'unit-card', style: 'margin-top:6px;' });
+  
+  const rangedAttackLine = el('div', { 
+    style: 'display:flex;align-items:center;justify-content:space-between;padding:12px 20px;gap:16px;' 
+  });
+  
+  // Container pour Attaque à distance + coût (à gauche)
+  const rangedAttackLabelContainer = el('div', { 
+    style: 'display:flex;flex-direction:column;align-items:center;' 
+  });
+  const rangedAttackLabel = el('span', { 
+    textContent: 'Attaque à distance', 
+    style: 'font-size:15px;color:#cfd6e6;margin-bottom:4px;font-weight:600;' 
+  });
+  const rangedAttackCost = el('span', { 
+    textContent: '100', 
+    style: 'color:#ffd54a;font-size:14px;font-weight:800;' 
+  });
+  rangedAttackLabelContainer.append(rangedAttackLabel, rangedAttackCost);
+  
+  // Container pour les contrôles (à droite)
+  const rangedAttackControlsContainer = el('div', { 
+    style: 'display:flex;align-items:center;gap:6px;' 
+  });
+  
+  const rangedAttackCount = el('div', { 
+    id: 'rangedAttackCount',
+    textContent: '0', 
+    style: 'background:#6b7280;color:#fff;border-radius:4px;padding:3px 6px;font-size:11px;min-width:20px;text-align:center;font-weight:600;' 
+  });
+  const rangedAttackMinus = el('button', { 
+    textContent: '−',
+    style: 'width:20px;height:20px;border-radius:4px;border:1px solid #4b5563;background:#374151;color:#fff;font-size:12px;font-weight:600;display:flex;align-items:center;justify-content:center;cursor:pointer;' 
+  });
+  const rangedAttackPlus = el('button', { 
+    textContent: '+',
+    style: 'width:20px;height:20px;border-radius:4px;border:1px solid #4b5563;background:#374151;color:#fff;font-size:12px;font-weight:600;display:flex;align-items:center;justify-content:center;cursor:pointer;' 
+  });
+  
+  rangedAttackControlsContainer.append(rangedAttackCount, rangedAttackMinus, rangedAttackPlus);
+  rangedAttackLine.append(rangedAttackLabelContainer, rangedAttackControlsContainer);
+  
+  // Event listeners pour Attaque à distance
+  rangedAttackPlus.addEventListener('click', () => {
+    const total = getTotalModules();
+    if (total < 10) {
+      state.selectedModules.ranged_attack++;
+      updateModuleDisplay();
+      updateEnergyCost();
+    }
+  });
+  
+  rangedAttackMinus.addEventListener('click', () => {
+    if (state.selectedModules.ranged_attack > 0) {
+      state.selectedModules.ranged_attack--;
+      updateModuleDisplay();
+      updateEnergyCost();
+    }
+  });
+
+  rangedAttackBox.append(rangedAttackLine);
   
   const list = el('div', { className: 'unit-list' });
-  list.append(creationBox, moduleTitle, movementBox, armorBox, attackBox);
+  list.append(creationBox, moduleTitle, movementBox, armorBox, attackBox, rangedAttackBox);
   panel.append(separator, mainTitle, list);
   // init texte PV et coût énergie
   updateHqHpLine();
@@ -3596,6 +3858,25 @@ function createExplosion(tileX, tileY) {
     startTime: now,
     duration,
     particles
+  });
+}
+
+// Crée une animation de laser pour l'attaque à distance
+function createLaserAnimation(fromX, fromY, toX, toY, playerColor) {
+  const now = performance.now();
+  const duration = 300; // Durée courte pour un laser
+  
+  // Ajouter l'animation laser à state.explosions (on réutilise le système existant)
+  state.explosions.push({
+    type: 'laser',
+    fromX,
+    fromY,
+    toX,
+    toY,
+    playerColor,
+    startTime: now,
+    duration,
+    particles: [] // Pas de particules pour un laser
   });
 }
 
@@ -3753,6 +4034,10 @@ function updateModuleDisplay() {
   if (attackCount) {
     attackCount.textContent = state.selectedModules.attack.toString();
   }
+  const rangedAttackCount = q('#rangedAttackCount');
+  if (rangedAttackCount) {
+    rangedAttackCount.textContent = state.selectedModules.ranged_attack.toString();
+  }
 }
 
 function updateEnergyCost() {
@@ -3794,7 +4079,7 @@ function updateCreateButtonState() {
 }
 
 function calculateUnitCost() {
-  return state.selectedModules.movement * 50 + state.selectedModules.shield * 150 + state.selectedModules.attack * 80; // 50 énergie par module de mouvement, 150 par module de bouclier, 80 par module d'attaque
+  return state.selectedModules.movement * 50 + state.selectedModules.shield * 150 + state.selectedModules.attack * 80 + state.selectedModules.ranged_attack * 100; // 50 énergie par module de mouvement, 150 par module de bouclier, 80 par module d'attaque, 100 par module d'attaque à distance
 }
 
 function updateHqHpLine() {
@@ -3995,6 +4280,7 @@ function spawnUnit() {
   state.selectedModules.movement = 0;
   state.selectedModules.shield = 0;
   state.selectedModules.attack = 0;
+  state.selectedModules.ranged_attack = 0;
   updateModuleDisplay();
   updateEnergyCost();
   updateHqHpLine(); // Mettre à jour l'affichage de l'énergie du QG
@@ -4042,6 +4328,9 @@ function spawnUnitFromHQ(hq, ownerIndex, offsetIdx = 0) {
         }
         for (let i = 0; i < state.selectedModules.attack; i++) {
           modules.push({ type: 'attack', hp: 100, maxHp: 100 });
+        }
+        for (let i = 0; i < state.selectedModules.ranged_attack; i++) {
+          modules.push({ type: 'ranged_attack', hp: 100, maxHp: 100 });
         }
       } else { // Unités initiales (spawn automatique au début)
         // Une unité initiale basique sans module
@@ -4201,6 +4490,9 @@ function drawModuleRing(ctx, u, cx, cy, r, ringW) {
               break;
             case 'attack':
               moduleColor = '#ff0000'; // Rouge pour attaque
+              break;
+            case 'ranged_attack':
+              moduleColor = '#654321'; // Marron foncé pour attaque à distance
               break;
             default:
               moduleColor = '#6b7280';
