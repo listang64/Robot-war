@@ -1373,24 +1373,169 @@ function damageHQ(hq, damage) {
   
   // Si le QG est détruit, créer une grosse explosion et le supprimer
   if (hq.hp <= 0) {
-    console.log(`💥 QG ${hq.colorKey} détruit !`);
+    const frenchColor = translateColorToFrench(hq.colorKey);
+    console.log(`💥 QG ${frenchColor} détruit !`);
     
     // Créer une grosse explosion au centre du QG
     createHQExplosion(hq.cx, hq.cy);
+    
+    // Détruire toutes les unités et bâtiments de ce joueur
+    destroyPlayerUnitsAndBuildings(hq.colorKey);
     
     // Supprimer le QG de la liste
     const hqIndex = state.hqs.findIndex(h => h.colorKey === hq.colorKey);
     if (hqIndex !== -1) {
       state.hqs.splice(hqIndex, 1);
-      console.log(`QG ${hq.colorKey} retiré de la carte`);
+      console.log(`QG ${frenchColor} retiré de la carte`);
     }
+    
+    // Vérifier condition de victoire
+    checkVictoryCondition();
     
     // Redessiner la scène
     const canvas = q('#game');
     if (canvas) drawScene(canvas);
-    
-    // TODO: Logique de fin de partie/victoire
   }
+}
+
+// Détruit toutes les unités et bâtiments d'un joueur
+function destroyPlayerUnitsAndBuildings(colorKey) {
+  const frenchColor = translateColorToFrench(colorKey);
+  console.log(`🔥 Destruction de toutes les unités et bâtiments ${frenchColor}`);
+  
+  // Trouver l'index du joueur par sa couleur
+  const playerIndex = state.playerColors.indexOf(colorKey);
+  if (playerIndex === -1) {
+    console.log(`Erreur: Couleur ${frenchColor} non trouvée`);
+    return;
+  }
+  
+  // Détruire toutes les unités de ce joueur
+  const unitsToDestroy = state.units.filter(u => u.ownerIndex === playerIndex);
+  console.log(`Destruction de ${unitsToDestroy.length} unités ${frenchColor}`);
+  
+  unitsToDestroy.forEach(unit => {
+    // Créer une petite explosion pour chaque unité détruite
+    createAttackExplosion(unit.x, unit.y);
+    console.log(`💀 Unité ${unit.id} (${frenchColor}) détruite`);
+  });
+  
+  // Retirer toutes les unités de ce joueur
+  state.units = state.units.filter(u => u.ownerIndex !== playerIndex);
+  
+  // TODO: Ajouter destruction d'autres bâtiments si nécessaire (usines, etc.)
+  
+  console.log(`✅ Tous les éléments ${frenchColor} ont été détruits`);
+}
+
+// Vérifie la condition de victoire et affiche le message si quelqu'un a gagné
+function checkVictoryCondition() {
+  console.log(`🏆 Vérification condition de victoire...`);
+  console.log(`QGs restants: ${state.hqs.length}`);
+  
+  if (state.hqs.length <= 1) {
+    // Fin de partie !
+    if (state.hqs.length === 1) {
+      // Un seul QG restant = victoire
+      const winnerHQ = state.hqs[0];
+      const winnerColor = winnerHQ.colorKey;
+      const frenchColor = translateColorToFrench(winnerColor);
+      console.log(`🎉 Victoire du joueur ${frenchColor} !`);
+      displayVictoryMessage(winnerColor);
+    } else {
+      // Aucun QG restant = match nul (cas improbable)
+      console.log(`⚖️ Match nul - aucun QG restant`);
+      displayVictoryMessage(null);
+    }
+    
+    // Arrêter la simulation
+    stopSimulation();
+  } else {
+    console.log(`⏳ Partie continue - ${state.hqs.length} QGs restants`);
+  }
+}
+
+// Traduit les couleurs anglaises vers le français
+function translateColorToFrench(englishColor) {
+  const colorTranslations = {
+    'blue': 'bleu',
+    'red': 'rouge', 
+    'green': 'vert',
+    'purple': 'violet'
+  };
+  
+  return colorTranslations[englishColor] || englishColor;
+}
+
+// Affiche le message de victoire
+function displayVictoryMessage(winnerColor) {
+  // Créer ou trouver la div de message de victoire
+  let victoryDiv = q('#victory-message');
+  
+  if (!victoryDiv) {
+    victoryDiv = document.createElement('div');
+    victoryDiv.id = 'victory-message';
+    victoryDiv.style.cssText = `
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(0, 0, 0, 0.9);
+      color: white;
+      padding: 30px 50px;
+      border-radius: 15px;
+      font-size: 24px;
+      font-weight: bold;
+      text-align: center;
+      border: 3px solid #gold;
+      box-shadow: 0 0 20px rgba(255, 215, 0, 0.5);
+      z-index: 1000;
+      font-family: Arial, sans-serif;
+    `;
+    document.body.appendChild(victoryDiv);
+  }
+  
+  if (winnerColor) {
+    const frenchColor = translateColorToFrench(winnerColor);
+    victoryDiv.innerHTML = `
+      <div style="font-size: 32px; margin-bottom: 15px;">🏆 VICTOIRE ! 🏆</div>
+      <div style="font-size: 24px; color: ${winnerColor};">
+        Félicitations au joueur <strong style="text-transform: uppercase;">${frenchColor}</strong> !
+      </div>
+      <div style="font-size: 16px; margin-top: 20px; opacity: 0.8;">
+        Vous avez conquis tous les QGs ennemis !
+      </div>
+    `;
+  } else {
+    victoryDiv.innerHTML = `
+      <div style="font-size: 32px; margin-bottom: 15px;">⚖️ MATCH NUL ⚖️</div>
+      <div style="font-size: 20px;">
+        Tous les QGs ont été détruits simultanément !
+      </div>
+    `;
+  }
+  
+  victoryDiv.style.display = 'block';
+}
+
+// Arrête la simulation de jeu
+function stopSimulation() {
+  console.log(`⏹️ Arrêt de la simulation - Partie terminée`);
+  
+  // Arrêter la boucle d'animation si elle existe
+  if (window.gameAnimationId) {
+    cancelAnimationFrame(window.gameAnimationId);
+    window.gameAnimationId = null;
+  }
+  
+  // Désactiver les contrôles de jeu
+  const stepButton = q('#step-btn');
+  const playButton = q('#play-btn');
+  
+  if (stepButton) stepButton.disabled = true;
+  if (playButton) playButton.disabled = true;
+  
+  console.log(`✅ Simulation arrêtée avec succès`);
 }
 
 // Déplace une unité vers une cible
