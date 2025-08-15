@@ -24,6 +24,7 @@ const state = {
   units: [], // { id, ownerIndex, x, y, hp, recentTrail, lastDir, anim, lastAttackTime }
   programs: {}, // key unitId -> number[] commands
   explosions: [], // { x, y, startTime, duration, particles: [{x, y, vx, vy, life}] }
+  activeLasers: [], // { unitId, targetId, targetType, startTime, playerColor }
   simIntervalId: null,
   animRafId: null,
   simRafId: null,
@@ -666,17 +667,15 @@ document.addEventListener('click', (e) => {
   } else {
     // Unité normale avec modules complets
     modules = [
-      // 4 modules de mouvement
+      // 3 modules de mouvement
       { type: 'movement', hp: 100, maxHp: 100 },
       { type: 'movement', hp: 100, maxHp: 100 },
       { type: 'movement', hp: 100, maxHp: 100 },
-      { type: 'movement', hp: 100, maxHp: 100 },
-      // 2 modules de bouclier
+      // 1 module de bouclier
       { type: 'shield', hp: 100, maxHp: 100 },
-      { type: 'shield', hp: 100, maxHp: 100 },
-      // 2 modules d'attaque
-      { type: 'attack', hp: 100, maxHp: 100 },
-      { type: 'attack', hp: 100, maxHp: 100 }
+      // 2 modules d'attaque à distance
+      { type: 'ranged_attack', hp: 100, maxHp: 100 },
+      { type: 'ranged_attack', hp: 100, maxHp: 100 }
     ];
   }
   state.units.push({ id: idNum, ownerIndex, x: gx, y: gy, hp: 1, modules: modules, recentTrail: [], lastDir: null, anim: null, lastAttackTime: null });
@@ -691,9 +690,16 @@ document.addEventListener('click', (e) => {
   const newUnit = state.units[state.units.length - 1];
   checkForEnemyHQDiscovery(newUnit);
   
-  // Programmer automatiquement l'unité avec la séquence: ID 6 11 5 12 15 2
-  state.programs[String(idNum)] = [6, 11, 5, 12, 15, 2];
-  console.log(`Unité développeur ${idNum} créée avec modules prédéfinis et programmée automatiquement`);
+  // Programmer automatiquement l'unité
+  if (devSpawnSelection.type === 'unit_2movement') {
+    // Unité rouge spéciale: seulement exploration
+    state.programs[String(idNum)] = [6];
+    console.log(`Unité rouge ${idNum} créée avec programmation d'exploration simple`);
+  } else {
+    // Unités normales: séquence complète
+    state.programs[String(idNum)] = [6, 11, 5, 12, 15, 2];
+    console.log(`Unité développeur ${idNum} créée avec modules prédéfinis et programmée automatiquement`);
+  }
   
   const canvas2 = q('#game'); if (canvas2) drawScene(canvas2);
   devSpawnSelection = null;
@@ -1289,8 +1295,8 @@ function processAttackCommand(u) {
   let attackType = null;
   
   if (hasRangedAttack) {
-    // Chercher d'abord des ennemis à portée d'attaque à distance (5 cases)
-    nearestEnemy = findNearestEnemyUnitInRange(u, 5);
+    // Chercher d'abord des ennemis à portée d'attaque à distance (6 cases)
+    nearestEnemy = findNearestEnemyUnitInRange(u, 6);
     if (nearestEnemy) {
       attackType = 'ranged';
       console.log(`Unité ${u.id}: Cible à distance trouvée: ${nearestEnemy.type} à (${nearestEnemy.x}, ${nearestEnemy.y})`);
@@ -1367,8 +1373,8 @@ function processAttackCommand(u) {
         
         // Créer l'animation appropriée
         if (isRangedAttack) {
-          // Animation laser pour attaque à distance
-          createLaserAnimation(u.x, u.y, nearestEnemy.x, nearestEnemy.y, state.playerColors[u.ownerIndex]);
+          // Animation laser continu pour attaque à distance
+          createContinuousLaser(u, nearestEnemy, state.playerColors[u.ownerIndex]);
         } else {
           // Animation explosion pour attaque C.A.C
           createAttackExplosion(nearestEnemy.x, nearestEnemy.y);
@@ -1510,7 +1516,7 @@ function evaluateCondition(u, condition) {
 
 // Détecte s'il y a une unité ennemie (robot ou QG) à proximité
 function detectEnemyUnit(u) {
-  const detectionRange = 6; // Portée de détection élargie pour QG
+  const detectionRange = 7; // Portée de détection élargie pour QG
   
   // Détecter les unités ennemies
   const enemyUnits = state.units.filter(unit => 
@@ -1736,8 +1742,8 @@ function executeAction(u, action) {
   return { moved: false };
 }
 
-// Trouve la cible ennemie la plus proche pour attaque à distance (portée 3)
-function findNearestEnemyUnitInRange(u, maxRange = 5) {
+// Trouve la cible ennemie la plus proche pour attaque à distance (portée par défaut 6)
+function findNearestEnemyUnitInRange(u, maxRange = 6) {
   let nearest = null;
   let minDistance = Infinity;
   
@@ -2752,6 +2758,12 @@ function drawExplosions(ctx, tile, ox, oy) {
     const elapsed = now - explosion.startTime;
     return elapsed < explosion.duration;
   });
+  
+  // Nettoyer les lasers inactifs (plus de portée ou cible détruite)
+  cleanupActiveLasers();
+  
+  // Dessiner les lasers actifs
+  drawActiveLasers(ctx, tile, ox, oy);
   
   // Dessiner chaque explosion active
   for (const explosion of state.explosions) {
@@ -3880,6 +3892,144 @@ function createLaserAnimation(fromX, fromY, toX, toY, playerColor) {
   });
 }
 
+// Crée ou met à jour un laser continu entre deux unités
+function createContinuousLaser(attacker, target, playerColor) {
+  const now = performance.now();
+  
+  // Supprimer tout laser existant de cette unité
+  state.activeLasers = state.activeLasers.filter(laser => laser.unitId !== attacker.id);
+  
+  // Ajouter le nouveau laser
+  state.activeLasers.push({
+    unitId: attacker.id,
+    targetId: target.target ? target.target.id : null,
+    targetType: target.type, // 'unit' ou 'hq'
+    targetX: target.x,
+    targetY: target.y,
+    startTime: now,
+    playerColor: playerColor
+  });
+}
+
+// Nettoie les lasers qui ne sont plus actifs
+function cleanupActiveLasers() {
+  state.activeLasers = state.activeLasers.filter(laser => {
+    // Trouver l'unité qui tire
+    const attacker = state.units.find(u => u.id === laser.unitId);
+    if (!attacker) return false; // Unité détruite
+    
+    // Trouver la cible
+    let target = null;
+    if (laser.targetType === 'unit') {
+      target = state.units.find(u => u.id === laser.targetId);
+      if (!target) return false; // Cible détruite
+    } else if (laser.targetType === 'hq') {
+      target = state.hqs.find(hq => Math.abs(hq.cx - laser.targetX) < 0.1 && Math.abs(hq.cy - laser.targetY) < 0.1);
+      if (!target) return false; // QG détruit
+    }
+    
+    // Vérifier si encore à portée (6 cases)
+    const distance = Math.abs(attacker.x - laser.targetX) + Math.abs(attacker.y - laser.targetY);
+    if (distance > 6) return false; // Plus à portée
+    
+    // Vérifier si l'unité a encore des modules d'attaque à distance
+    const hasRangedAttack = attacker.modules && attacker.modules.some(m => m.type === 'ranged_attack' && m.hp > 0);
+    if (!hasRangedAttack) return false; // Plus de modules d'attaque
+    
+    return true; // Laser toujours actif
+  });
+}
+
+// Dessine les lasers actifs
+function drawActiveLasers(ctx, tile, ox, oy) {
+  const now = performance.now();
+  
+  for (const laser of state.activeLasers) {
+    // Trouver l'unité qui tire
+    const attacker = state.units.find(u => u.id === laser.unitId);
+    if (!attacker) continue;
+    
+    // Position de l'attaquant (avec animation si nécessaire)
+    let fromX = attacker.x;
+    let fromY = attacker.y;
+    if (attacker.anim && attacker.anim.endTime > now) {
+      const animProgress = easeOutCubic((now - attacker.anim.startTime) / (attacker.anim.endTime - attacker.anim.startTime));
+      fromX = attacker.anim.fromX + (attacker.anim.toX - attacker.anim.fromX) * animProgress;
+      fromY = attacker.anim.fromY + (attacker.anim.toY - attacker.anim.fromY) * animProgress;
+    }
+    
+    // Position de la cible (mise à jour en temps réel)
+    let toX = laser.targetX;
+    let toY = laser.targetY;
+    
+    // Si la cible est une unité, utiliser sa position actuelle avec animation
+    if (laser.targetType === 'unit') {
+      const targetUnit = state.units.find(u => u.id === laser.targetId);
+      if (targetUnit) {
+        toX = targetUnit.x;
+        toY = targetUnit.y;
+        
+        // Prendre en compte l'animation de déplacement de la cible
+        if (targetUnit.anim && targetUnit.anim.endTime > now) {
+          const targetAnimProgress = easeOutCubic((now - targetUnit.anim.startTime) / (targetUnit.anim.endTime - targetUnit.anim.startTime));
+          toX = targetUnit.anim.fromX + (targetUnit.anim.toX - targetUnit.anim.fromX) * targetAnimProgress;
+          toY = targetUnit.anim.fromY + (targetUnit.anim.toY - targetUnit.anim.fromY) * targetAnimProgress;
+        }
+      }
+    }
+    
+    // Convertir en coordonnées écran
+    const screenFromX = ox + (fromX + 0.5) * tile;
+    const screenFromY = oy + (fromY + 0.5) * tile;
+    const screenToX = ox + (toX + 0.3) * tile; // Légèrement à gauche comme demandé
+    const screenToY = oy + (toY + 0.2) * tile; // Vers le haut de l'unité cible
+    
+    // Couleur du laser
+    const playerColor = colorFromKey(laser.playerColor);
+    
+    // Effet de pulsation
+    const elapsed = now - laser.startTime;
+    const pulseIntensity = 0.7 + 0.3 * Math.sin(elapsed / 100); // Pulsation rapide
+    
+    ctx.save();
+    
+    // Dessiner le laser principal
+    ctx.strokeStyle = playerColor;
+    ctx.globalAlpha = pulseIntensity;
+    ctx.lineWidth = 3;
+    ctx.lineCap = 'round';
+    
+    ctx.beginPath();
+    ctx.moveTo(screenFromX, screenFromY);
+    ctx.lineTo(screenToX, screenToY);
+    ctx.stroke();
+    
+    // Halo lumineux externe
+    ctx.strokeStyle = playerColor;
+    ctx.globalAlpha = pulseIntensity * 0.3;
+    ctx.lineWidth = 8;
+    ctx.shadowColor = playerColor;
+    ctx.shadowBlur = 12;
+    
+    ctx.beginPath();
+    ctx.moveTo(screenFromX, screenFromY);
+    ctx.lineTo(screenToX, screenToY);
+    ctx.stroke();
+    
+    // Effet de lueur intermédiaire
+    ctx.globalAlpha = pulseIntensity * 0.6;
+    ctx.lineWidth = 5;
+    ctx.shadowBlur = 6;
+    
+    ctx.beginPath();
+    ctx.moveTo(screenFromX, screenFromY);
+    ctx.lineTo(screenToX, screenToY);
+    ctx.stroke();
+    
+    ctx.restore();
+  }
+}
+
 // Crée une animation d'explosion réduite pour les attaques
 function createAttackExplosion(tileX, tileY) {
   const now = performance.now();
@@ -4447,8 +4597,8 @@ function drawUnit(ctx, u, tile, ox, oy) {
   const dirW = Math.max(3, Math.floor(tile * 0.14));
   const outerRing = r + ringW * 0.5; // rayon extérieur de l'anneau
   const startLen = outerRing + dirW * 0.5 + Math.max(1, Math.floor(tile * 0.02));
-  // longueur réduite d'un tiers
-  const endLen = startLen + Math.max(3, Math.floor(tile * 0.36));
+  // longueur réduite encore plus
+  const endLen = startLen + Math.max(2, Math.floor(tile * 0.18));
   const sx = cx + Math.cos(heading) * startLen;
   const sy = cy + Math.sin(heading) * startLen;
   const hx = cx + Math.cos(heading) * endLen;
