@@ -245,6 +245,17 @@ function renderGame() {
   redUnitBtn.style.color = 'white';
   redUnitBtn.addEventListener('click', () => selectDevSpawn('unit_2movement', 'red'));
   devList.append(redUnitBtn);
+  
+  // Bouton spécial: Unité rouge CAC avec 2 mouvements + 1 attaque CAC
+  const redCacBtn = el('button', { className: 'dev-special', title: 'Unité rouge CAC: 2 mouvements, 1 attaque CAC' });
+  redCacBtn.textContent = 'Rouge CAC';
+  redCacBtn.style.backgroundColor = '#cc3333';
+  redCacBtn.style.color = 'white';
+  redCacBtn.addEventListener('click', () => selectDevSpawn('unit_cac', 'red'));
+  devList.append(redCacBtn);
+  
+
+  
   // --- Bouton: -100 PV au QG du joueur courant ---
   const dmgBtn = el('button', { className: 'dev-dmg', title: '-100 PV QG actif' });
   dmgBtn.textContent = '-100 PV QG';
@@ -466,6 +477,7 @@ function nextPlayer() {
   state.selectedModules.ranged_attack = 0;
   updateModuleDisplay();
   updateEnergyCost();
+  updateAttackButtonsState();
   // Met à jour la couleur du bouton de programmation
   const progBtn = q('#programBtn');
   if (progBtn) progBtn.style.setProperty('--progColor', getPlayerColor(state.currentPlayerIndex));
@@ -664,6 +676,14 @@ document.addEventListener('click', (e) => {
       { type: 'movement', hp: 100, maxHp: 100 },
       { type: 'movement', hp: 100, maxHp: 100 }
     ];
+  } else if (devSpawnSelection.type === 'unit_cac') {
+    // Unité rouge CAC: 2 mouvements + 1 attaque CAC
+    modules = [
+      { type: 'movement', hp: 100, maxHp: 100 },
+      { type: 'movement', hp: 100, maxHp: 100 },
+      { type: 'attack', hp: 100, maxHp: 100 }
+    ];
+
   } else {
     // Unité normale avec modules complets
     modules = [
@@ -695,6 +715,10 @@ document.addEventListener('click', (e) => {
     // Unité rouge spéciale: seulement exploration
     state.programs[String(idNum)] = [6];
     console.log(`Unité rouge ${idNum} créée avec programmation d'exploration simple`);
+  } else if (devSpawnSelection.type === 'unit_cac') {
+    // Unité rouge CAC: programmation avancée
+    state.programs[String(idNum)] = [6, 11, 5, 12, 15, 2, 14, 6];
+    console.log(`Unité rouge ${devSpawnSelection.type} ${idNum} créée avec programmation avancée`);
   } else {
     // Unités normales: séquence complète
     state.programs[String(idNum)] = [6, 11, 5, 12, 15, 2];
@@ -3289,7 +3313,7 @@ function computeHQs(numPlayers) {
     const near = findOpenCenterNear(target.x, target.y, minSep, result);
     ensureOpenHQArea(near.x, near.y);
     ensureOpenHQClearance(near.x, near.y, 2); // garantit 2 cases de sol autour du QG
-    result.push({ cx: near.x, cy: near.y, colorKey: state.playerColors[i], hp: 1000, hpMax: 1000, energy: 300, energyMax: 1000 });
+    result.push({ cx: near.x, cy: near.y, colorKey: state.playerColors[i], hp: 1000, hpMax: 1000, energy: 900, energyMax: 1000 });
   }
   return result;
 }
@@ -3536,10 +3560,10 @@ function renderSpawnPanel() {
   });
   
   // BOX 1: Création d'unité
-  const creationBox = el('div', { className: 'unit-card', style: 'margin-bottom:12px;' });
+  const creationBox = el('div', { className: 'unit-card' });
   
   const createLine = el('div', { 
-    style: 'display:flex;align-items:center;justify-content:space-between;padding:12px 24px;gap:20px;' 
+    style: 'display:flex;align-items:center;justify-content:space-between;padding:8px 16px;gap:16px;' 
   });
   const btn = button('Créer', () => spawnUnit());
   btn.id = 'createBtn'; // Ajouter un ID pour pouvoir le retrouver
@@ -3567,11 +3591,11 @@ function renderSpawnPanel() {
   });
   
   // BOX 2: Module Mouvement
-  const movementBox = el('div', { className: 'unit-card', style: 'margin-bottom:6px;' });
+  const movementBox = el('div', { className: 'unit-card' });
   
   // Module Mouvement avec tout aligné horizontalement
   const moduleLine = el('div', { 
-    style: 'display:flex;align-items:center;justify-content:space-between;padding:12px 20px;gap:16px;' 
+    style: 'display:flex;align-items:center;justify-content:space-between;padding:8px 16px;gap:12px;' 
   });
   
   // Container pour Mouvement + coût (à gauche)
@@ -3630,10 +3654,10 @@ function renderSpawnPanel() {
   movementBox.append(moduleLine);
   
   // BOX 3: Module Armure
-  const armorBox = el('div', { className: 'unit-card', style: 'margin-bottom:6px;' });
+  const armorBox = el('div', { className: 'unit-card' });
   
   const armorLine = el('div', { 
-    style: 'display:flex;align-items:center;justify-content:space-between;padding:12px 20px;gap:16px;' 
+    style: 'display:flex;align-items:center;justify-content:space-between;padding:8px 16px;gap:12px;' 
   });
   
   // Container pour Armure + coût (à gauche)
@@ -3696,7 +3720,7 @@ function renderSpawnPanel() {
   const attackBox = el('div', { className: 'unit-card' });
   
   const attackLine = el('div', { 
-    style: 'display:flex;align-items:center;justify-content:space-between;padding:12px 20px;gap:16px;' 
+    style: 'display:flex;align-items:center;justify-content:space-between;padding:8px 16px;gap:12px;' 
   });
   
   // Container pour Attaque + coût (à gauche)
@@ -3738,10 +3762,11 @@ function renderSpawnPanel() {
   // Event listeners pour Attaque
   attackPlus.addEventListener('click', () => {
     const total = getTotalModules();
-    if (total < 10) {
+    if (total < 10 && state.selectedModules.ranged_attack === 0) {
       state.selectedModules.attack++;
       updateModuleDisplay();
       updateEnergyCost();
+      updateAttackButtonsState();
     }
   });
   
@@ -3750,16 +3775,17 @@ function renderSpawnPanel() {
       state.selectedModules.attack--;
       updateModuleDisplay();
       updateEnergyCost();
+      updateAttackButtonsState();
     }
   });
 
   attackBox.append(attackLine);
 
   // BOX 5: Module Attaque à distance
-  const rangedAttackBox = el('div', { className: 'unit-card', style: 'margin-top:6px;' });
+  const rangedAttackBox = el('div', { className: 'unit-card' });
   
   const rangedAttackLine = el('div', { 
-    style: 'display:flex;align-items:center;justify-content:space-between;padding:12px 20px;gap:16px;' 
+    style: 'display:flex;align-items:center;justify-content:space-between;padding:8px 16px;gap:12px;' 
   });
   
   // Container pour Attaque à distance + coût (à gauche)
@@ -3801,10 +3827,11 @@ function renderSpawnPanel() {
   // Event listeners pour Attaque à distance
   rangedAttackPlus.addEventListener('click', () => {
     const total = getTotalModules();
-    if (total < 10) {
+    if (total < 10 && state.selectedModules.attack === 0) {
       state.selectedModules.ranged_attack++;
       updateModuleDisplay();
       updateEnergyCost();
+      updateAttackButtonsState();
     }
   });
   
@@ -3813,6 +3840,7 @@ function renderSpawnPanel() {
       state.selectedModules.ranged_attack--;
       updateModuleDisplay();
       updateEnergyCost();
+      updateAttackButtonsState();
     }
   });
 
@@ -3978,9 +4006,22 @@ function drawActiveLasers(ctx, tile, ox, oy) {
       }
     }
     
-    // Convertir en coordonnées écran
-    const screenFromX = ox + (fromX + 0.5) * tile;
-    const screenFromY = oy + (fromY + 0.5) * tile;
+    // Calculer la position de départ du laser (base du trait directionnel)
+    // Reproduire les calculs de drawUnit pour trouver la base du trait
+    const unitCenterX = ox + (fromX + 0.5) * tile;
+    const unitCenterY = oy + (fromY + 0.5) * tile;
+    const r = tile * 0.46;
+    const ringW = Math.max(3, Math.floor(tile * 0.22));
+    const dirW = Math.max(3, Math.floor(tile * 0.14));
+    const outerRing = r + ringW * 0.5;
+    const startLen = outerRing + dirW * 0.5 + Math.max(1, Math.floor(tile * 0.02));
+    
+    // Calculer l'angle vers la cible pour orienter le laser
+    const laserAngle = Math.atan2(toY - fromY, toX - fromX);
+    
+    // Position de départ du laser (base du trait directionnel)
+    const screenFromX = unitCenterX + Math.cos(laserAngle) * startLen;
+    const screenFromY = unitCenterY + Math.sin(laserAngle) * startLen;
     const screenToX = ox + (toX + 0.3) * tile; // Légèrement à gauche comme demandé
     const screenToY = oy + (toY + 0.2) * tile; // Vers le haut de l'unité cible
     
@@ -4187,6 +4228,36 @@ function updateModuleDisplay() {
   const rangedAttackCount = q('#rangedAttackCount');
   if (rangedAttackCount) {
     rangedAttackCount.textContent = state.selectedModules.ranged_attack.toString();
+  }
+}
+
+// Met à jour l'état des boutons d'attaque (exclusion mutuelle)
+function updateAttackButtonsState() {
+  const attackPlus = q('#attackPlus');
+  const rangedAttackPlus = q('#rangedAttackPlus');
+  
+  if (attackPlus && rangedAttackPlus) {
+    // Si on a des modules d'attaque à distance, griser les boutons d'attaque CAC
+    if (state.selectedModules.ranged_attack > 0) {
+      attackPlus.disabled = true;
+      attackPlus.style.opacity = '0.5';
+      attackPlus.style.cursor = 'not-allowed';
+    } else {
+      attackPlus.disabled = false;
+      attackPlus.style.opacity = '1';
+      attackPlus.style.cursor = 'pointer';
+    }
+    
+    // Si on a des modules d'attaque CAC, griser les boutons d'attaque à distance
+    if (state.selectedModules.attack > 0) {
+      rangedAttackPlus.disabled = true;
+      rangedAttackPlus.style.opacity = '0.5';
+      rangedAttackPlus.style.cursor = 'not-allowed';
+    } else {
+      rangedAttackPlus.disabled = false;
+      rangedAttackPlus.style.opacity = '1';
+      rangedAttackPlus.style.cursor = 'pointer';
+    }
   }
 }
 
@@ -4433,6 +4504,7 @@ function spawnUnit() {
   state.selectedModules.ranged_attack = 0;
   updateModuleDisplay();
   updateEnergyCost();
+  updateAttackButtonsState();
   updateHqHpLine(); // Mettre à jour l'affichage de l'énergie du QG
   updateCreateButtonState(); // Mettre à jour l'état du bouton après création
   const panel = q('#spawnPanel'); if (panel) panel.classList.remove('visible');
@@ -4591,7 +4663,34 @@ function drawUnit(ctx, u, tile, ox, oy) {
   const now2 = performance.now();
   const headingT = (u.headingEnd && u.headingEnd > now2)
     ? easeOutCubic((now2 - u.headingStart) / (u.headingEnd - u.headingStart)) : 1;
-  const heading = (u.headingFrom ?? 0) + ((u.headingTo ?? 0) - (u.headingFrom ?? 0)) * Math.min(1, Math.max(0, headingT));
+  let heading = (u.headingFrom ?? 0) + ((u.headingTo ?? 0) - (u.headingFrom ?? 0)) * Math.min(1, Math.max(0, headingT));
+  
+  // Vérifier si l'unité tire à distance et orienter le trait vers la cible
+  const activeLaser = state.activeLasers.find(laser => laser.unitId === u.id);
+  if (activeLaser) {
+    // Calculer l'angle vers la cible
+    let targetX = activeLaser.targetX;
+    let targetY = activeLaser.targetY;
+    
+    // Si la cible est une unité, utiliser sa position actuelle
+    if (activeLaser.targetType === 'unit') {
+      const targetUnit = state.units.find(unit => unit.id === activeLaser.targetId);
+      if (targetUnit) {
+        targetX = targetUnit.x;
+        targetY = targetUnit.y;
+        // Prendre en compte l'animation de la cible
+        if (targetUnit.anim && targetUnit.anim.endTime > now2) {
+          const targetAnimProgress = easeOutCubic((now2 - targetUnit.anim.startTime) / (targetUnit.anim.endTime - targetUnit.anim.startTime));
+          targetX = targetUnit.anim.fromX + (targetUnit.anim.toX - targetUnit.anim.fromX) * targetAnimProgress;
+          targetY = targetUnit.anim.fromY + (targetUnit.anim.toY - targetUnit.anim.fromY) * targetAnimProgress;
+        }
+      }
+    }
+    
+    // Calculer l'angle vers la cible
+    heading = Math.atan2(targetY - ty, targetX - tx);
+  }
+  
   // Petit trait directionnel à l'extérieur du cercle:
   // démarre juste APRÈS l'extérieur de l'anneau sans chevauchement (prend en compte ringW et l'épaisseur du trait)
   const dirW = Math.max(3, Math.floor(tile * 0.14));
