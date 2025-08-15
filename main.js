@@ -1403,6 +1403,15 @@ function processAttackCommand(u) {
         } else {
           // Animation explosion pour attaque C.A.C
           createAttackExplosion(nearestEnemy.x, nearestEnemy.y);
+          
+          // Ajouter des étincelles rouges pour l'attaque CAC
+          const canvas = q('#game');
+          if (canvas) {
+            const { tile, ox, oy } = computeCanvasMetrics(canvas);
+            const sparkX = ox + (nearestEnemy.x + 0.5) * tile;
+            const sparkY = oy + (nearestEnemy.y + 0.5) * tile;
+            createMeleeSparks(sparkX, sparkY);
+          }
         }
         
         return { moved: false }; // L'attaque ne compte pas comme un mouvement
@@ -4129,26 +4138,54 @@ function drawLaserSparks(ctx, tile, ox, oy) {
         const px = spark.x + particle.x * tile;
         const py = spark.y + particle.y * tile;
         
-        // Taille très petite basée sur la vie restante
-        const size = Math.max(0.3, tile * 0.03 * particle.life); // Très petites étincelles
+        // Taille basée sur la vie restante et le type d'étincelle
+        let size;
+        if (particle.color === 'red') {
+          // Étincelles CAC légèrement plus grandes
+          size = Math.max(0.4, tile * 0.04 * particle.life);
+        } else {
+          // Étincelles laser plus petites
+          size = Math.max(0.3, tile * 0.03 * particle.life);
+        }
         const alpha = particle.life * 0.7; // Légèrement plus visibles
         
-        // Couleur de l'étincelle en teintes orangées
-        const red = Math.floor(255 * Math.min(1, particle.life + 0.3));
-        const green = Math.floor(180 * particle.life);
-        const blue = Math.floor(50 * particle.life);
-        
-        ctx.fillStyle = `rgba(${red}, ${green}, ${blue}, ${alpha})`;
-        ctx.beginPath();
-        ctx.arc(px, py, size, 0, Math.PI * 2);
-        ctx.fill();
-        
-        // Ajouter un petit halo orangé
-        if (particle.life > 0.4) {
-          ctx.fillStyle = `rgba(255, 200, 100, ${alpha * 0.3})`;
+        // Couleur de l'étincelle selon le type
+        if (particle.color === 'red') {
+          // Étincelles rouges vives pour CAC
+          const red = Math.floor(255 * Math.min(1, particle.life + 0.5));
+          const green = Math.floor(50 * particle.life);
+          const blue = Math.floor(30 * particle.life);
+          
+          ctx.fillStyle = `rgba(${red}, ${green}, ${blue}, ${alpha})`;
           ctx.beginPath();
-          ctx.arc(px, py, size * 1.1, 0, Math.PI * 2);
+          ctx.arc(px, py, size, 0, Math.PI * 2);
           ctx.fill();
+          
+          // Ajouter un petit halo rouge
+          if (particle.life > 0.4) {
+            ctx.fillStyle = `rgba(255, 100, 50, ${alpha * 0.3})`;
+            ctx.beginPath();
+            ctx.arc(px, py, size * 1.1, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        } else {
+          // Étincelles orangées pour lasers
+          const red = Math.floor(255 * Math.min(1, particle.life + 0.3));
+          const green = Math.floor(180 * particle.life);
+          const blue = Math.floor(50 * particle.life);
+          
+          ctx.fillStyle = `rgba(${red}, ${green}, ${blue}, ${alpha})`;
+          ctx.beginPath();
+          ctx.arc(px, py, size, 0, Math.PI * 2);
+          ctx.fill();
+          
+          // Ajouter un petit halo orangé
+          if (particle.life > 0.4) {
+            ctx.fillStyle = `rgba(255, 200, 100, ${alpha * 0.3})`;
+            ctx.beginPath();
+            ctx.arc(px, py, size * 1.1, 0, Math.PI * 2);
+            ctx.fill();
+          }
         }
       }
     }
@@ -4175,6 +4212,36 @@ function createLaserSparks(x, y, playerColor) {
       vy: Math.sin(angle) * speed,
       life: 1.0, // 1.0 = vivant, 0.0 = mort
       color: playerColor // Couleur du laser
+    });
+  }
+  
+  state.laserSparks.push({
+    x,
+    y,
+    startTime: now,
+    duration,
+    particles
+  });
+}
+
+// Crée des étincelles rouges vives pour les attaques CAC
+function createMeleeSparks(x, y) {
+  const now = performance.now();
+  const duration = 500; // Durée plus longue pour être visible au-dessus de l'explosion
+  const particleCount = 3; // Peu de particules
+  const particles = [];
+  
+  // Créer les particules d'étincelles rouges
+  for (let i = 0; i < particleCount; i++) {
+    const angle = (Math.PI * 2 * i) / particleCount + (Math.random() - 0.5) * 0.6;
+    const speed = 0.1 + Math.random() * 0.3; // Vitesse très faible pour rester près de l'unité
+    particles.push({
+      x: 0, // Position relative au centre
+      y: 0,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      life: 1.0, // 1.0 = vivant, 0.0 = mort
+      color: 'red' // Couleur rouge vive pour CAC
     });
   }
   
