@@ -294,8 +294,8 @@ function renderGame() {
     unitsWithModules.sort((a, b) => b.id - a.id);
     const lastUnit = unitsWithModules[0];
     
-    // Appliquer 25 dégâts en utilisant le système de priorité des boucliers
-    damageUnit(lastUnit, 25);
+    // Appliquer 25 dégâts en utilisant le système de priorité des boucliers (attaque CAC)
+    damageUnit(lastUnit, 25, 'melee');
     
     const canvas = q('#game'); if (canvas) drawScene(canvas);
   });
@@ -1385,7 +1385,7 @@ function processAttackCommand(u) {
         if (nearestEnemy.type === 'unit') {
           // Attaquer une unité
           console.log(`Unité ${u.id} attaque l'unité ${nearestEnemy.target.id} pour ${attackDamage} dégâts`);
-          damageUnit(nearestEnemy.target, attackDamage);
+          damageUnit(nearestEnemy.target, attackDamage, isRangedAttack ? 'ranged' : 'melee');
         } else if (nearestEnemy.type === 'hq') {
           // Attaquer un QG
           const distanceToHQ = Math.abs(u.x - nearestEnemy.target.cx) + Math.abs(u.y - nearestEnemy.target.cy);
@@ -4246,17 +4246,24 @@ function createHQExplosion(tileX, tileY) {
 }
 
 // Applique des dégâts à une unité avec ciblage aléatoire des modules
-function damageUnit(unit, damage) {
+function damageUnit(unit, damage, attackType = 'melee') {
   if (!unit.modules || unit.modules.length === 0) return;
   
   // Vérifier s'il y a des boucliers fonctionnels pour la réduction de dégâts
   const workingShields = unit.modules.filter(m => m.type === 'shield' && m.hp > 0);
   let actualDamage = damage;
   
-  // Si il y a des boucliers fonctionnels, réduire les dégâts de 20%
+  // Si il y a des boucliers fonctionnels, appliquer la logique selon le type d'attaque
   if (workingShields.length > 0) {
-    actualDamage = Math.floor(damage * 0.8);
-    console.log(`Dégâts réduits de 20% grâce aux boucliers: ${damage} → ${actualDamage}`);
+    if (attackType === 'ranged') {
+      // Les lasers ignorent la résistance des boucliers et font 20 dégâts au lieu de 10
+      actualDamage = damage * 2; // Doubler les dégâts (10 → 20)
+      console.log(`Attaque laser: les boucliers sont ignorés, dégâts doublés: ${damage} → ${actualDamage}`);
+    } else {
+      // Attaque CAC: réduction de 20% des dégâts
+      actualDamage = Math.floor(damage * 0.8);
+      console.log(`Attaque CAC: dégâts réduits de 20% grâce aux boucliers: ${damage} → ${actualDamage}`);
+    }
   }
   
   let remainingDamage = actualDamage;
