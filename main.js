@@ -3615,28 +3615,28 @@ function renderSpawnPanel() {
   // BOX 2: Module Mouvement
   const movementBox = el('div', { className: 'unit-card' });
   
-  // Module Mouvement avec tout aligné horizontalement
+  // Module Mouvement avec texte centré et compteurs à droite
   const moduleLine = el('div', { 
     style: 'display:flex;align-items:center;justify-content:space-between;padding:8px 16px;gap:12px;' 
   });
   
-  // Container pour Mouvement + coût (à gauche)
+  // Container pour Mouvement + coût (centré)
   const movementLabelContainer = el('div', { 
-    style: 'display:flex;flex-direction:column;align-items:center;' 
+    style: 'display:flex;flex-direction:column;align-items:center;flex:1;text-align:center;' 
   });
   const movementLabel = el('span', { 
     textContent: 'Mouvement', 
     style: 'font-size:15px;color:#cfd6e6;margin-bottom:4px;font-weight:600;' 
   });
   const movementCost = el('span', { 
-    textContent: '50', 
+    textContent: '50 ⚡', 
     style: 'color:#ffd54a;font-size:14px;font-weight:800;' 
   });
   movementLabelContainer.append(movementLabel, movementCost);
   
   // Container pour les contrôles (à droite)
   const controlsContainer = el('div', { 
-    style: 'display:flex;align-items:center;gap:6px;' 
+    style: 'display:flex;align-items:center;gap:6px;margin-left:auto;' 
   });
   
   const movementCount = el('div', { 
@@ -3684,21 +3684,21 @@ function renderSpawnPanel() {
   
   // Container pour Armure + coût (à gauche)
   const armorLabelContainer = el('div', { 
-    style: 'display:flex;flex-direction:column;align-items:center;' 
+    style: 'display:flex;flex-direction:column;align-items:center;flex:1;text-align:center;' 
   });
   const shieldLabel = el('span', { 
     textContent: 'Bouclier', 
     style: 'font-size:15px;color:#cfd6e6;margin-bottom:4px;font-weight:600;' 
   });
   const shieldCost = el('span', { 
-    textContent: '150', 
+    textContent: '150 ⚡', 
     style: 'color:#ffd54a;font-size:14px;font-weight:800;' 
   });
   armorLabelContainer.append(shieldLabel, shieldCost);
   
   // Container pour les contrôles (à droite)
   const armorControlsContainer = el('div', { 
-    style: 'display:flex;align-items:center;gap:6px;' 
+    style: 'display:flex;align-items:center;gap:6px;margin-left:auto;' 
   });
   
   const shieldCount = el('div', { 
@@ -3745,23 +3745,23 @@ function renderSpawnPanel() {
     style: 'display:flex;align-items:center;justify-content:space-between;padding:8px 16px;gap:12px;' 
   });
   
-  // Container pour Attaque + coût (à gauche)
+  // Container pour Attaque + coût (centré)
   const attackLabelContainer = el('div', { 
-    style: 'display:flex;flex-direction:column;align-items:center;' 
+    style: 'display:flex;flex-direction:column;align-items:center;flex:1;text-align:center;' 
   });
   const attackLabel = el('span', { 
     textContent: 'Attaque C.A.C', 
     style: 'font-size:15px;color:#cfd6e6;margin-bottom:4px;font-weight:600;' 
   });
   const attackCost = el('span', { 
-    textContent: '80', 
+    textContent: '80 ⚡', 
     style: 'color:#ffd54a;font-size:14px;font-weight:800;' 
   });
   attackLabelContainer.append(attackLabel, attackCost);
   
   // Container pour les contrôles (à droite)
   const attackControlsContainer = el('div', { 
-    style: 'display:flex;align-items:center;gap:6px;' 
+    style: 'display:flex;align-items:center;gap:6px;margin-left:auto;' 
   });
   
   const attackCount = el('div', { 
@@ -3810,23 +3810,23 @@ function renderSpawnPanel() {
     style: 'display:flex;align-items:center;justify-content:space-between;padding:8px 16px;gap:12px;' 
   });
   
-  // Container pour Attaque à distance + coût (à gauche)
+  // Container pour Attaque à distance + coût (centré)
   const rangedAttackLabelContainer = el('div', { 
-    style: 'display:flex;flex-direction:column;align-items:center;' 
+    style: 'display:flex;flex-direction:column;align-items:center;flex:1;text-align:center;' 
   });
   const rangedAttackLabel = el('span', { 
     textContent: 'Attaque à distance', 
     style: 'font-size:15px;color:#cfd6e6;margin-bottom:4px;font-weight:600;' 
   });
   const rangedAttackCost = el('span', { 
-    textContent: '100', 
+    textContent: '100 ⚡', 
     style: 'color:#ffd54a;font-size:14px;font-weight:800;' 
   });
   rangedAttackLabelContainer.append(rangedAttackLabel, rangedAttackCost);
   
   // Container pour les contrôles (à droite)
   const rangedAttackControlsContainer = el('div', { 
-    style: 'display:flex;align-items:center;gap:6px;' 
+    style: 'display:flex;align-items:center;gap:6px;margin-left:auto;' 
   });
   
   const rangedAttackCount = el('div', { 
