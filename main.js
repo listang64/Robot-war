@@ -3537,25 +3537,47 @@ function drawHQEnergyBar(ctx, hq, tile, cx, cy, size) {
 // --- Panel et logique de spawn ---
 function renderSpawnPanel() {
   const panel = el('div', { className: 'spawn-panel', id: 'spawnPanel' });
-  // En-tête QG + PV (centrés)
-  const header = el('div', { style: 'text-align:center;' });
-  const title = el('h3', { textContent: 'QG', style: 'margin:0 0 4px 0;' });
-  const hpLabel = el('div', { id: 'hqHpLabel', textContent: 'Points de vie', style: 'color:#39ff14;font-weight:800;margin:0 0 4px 0;' });
-  const hpLine = el('div', { id: 'hqHpLine', style: 'color:#39ff14;font-weight:800;margin:0 0 12px 0;' });
-  const energyLabel = el('div', { id: 'hqEnergyLabel', textContent: 'Énergie', style: 'color:#ffd54a;font-weight:800;margin:6px 0 4px 0;' });
-  const energyLine = el('div', { id: 'hqEnergyLine', style: 'color:#ffd54a;font-weight:800;margin:0 0 10px 0;' });
-  header.append(title, hpLabel, hpLine, energyLabel, energyLine);
-  panel.append(header);
 
-  // Séparateur "----" au dessus du titre
+
+  // Ligne Points de vie avec cœur rouge
+  const hpDisplayLine = el('div', { 
+    style: 'display:flex;align-items:center;justify-content:center;gap:6px;margin:8px 0;' 
+  });
+  const heartIcon = el('span', { 
+    textContent: '❤️', 
+    style: 'font-size:14px;' 
+  });
+  const hpDisplay = el('div', { 
+    id: 'hqHpDisplay',
+    textContent: '1000 / 1000',
+    style: 'color:#ff4444;font-weight:600;font-size:14px;' 
+  });
+  hpDisplayLine.append(heartIcon, hpDisplay);
+  
+  // Ligne Énergie avec éclair jaune
+  const energyDisplayLine = el('div', { 
+    style: 'display:flex;align-items:center;justify-content:center;gap:6px;margin:8px 0;' 
+  });
+  const lightningIcon = el('span', { 
+    textContent: '⚡', 
+    style: 'font-size:14px;' 
+  });
+  const energyDisplay = el('div', { 
+    id: 'hqEnergyDisplay',
+    textContent: '900 / 1000',
+    style: 'color:#ffd54a;font-weight:600;font-size:14px;' 
+  });
+  energyDisplayLine.append(lightningIcon, energyDisplay);
+  
+  // Séparateur "----"
   const separator = el('div', { 
     textContent: '----', 
     style: 'text-align:center;color:#9aa4b2;margin:8px 0;font-weight:600;' 
   });
   
-  // Titre au dessus de tout (même au dessus de la box)
+  // Titre "Usine à Robots"
   const mainTitle = el('div', { 
-    textContent: 'Créer ton robot', 
+    textContent: 'Usine à Robots', 
     style: 'text-align:center;color:#cfd6e6;font-size:16px;font-weight:600;margin-bottom:12px;position:relative;z-index:10;' 
   });
   
@@ -3848,7 +3870,7 @@ function renderSpawnPanel() {
   
   const list = el('div', { className: 'unit-list' });
   list.append(creationBox, moduleTitle, movementBox, armorBox, attackBox, rangedAttackBox);
-  panel.append(separator, mainTitle, list);
+  panel.append(hpDisplayLine, energyDisplayLine, separator, mainTitle, list);
   // init texte PV et coût énergie
   updateHqHpLine();
   updateEnergyCost();
@@ -4304,16 +4326,17 @@ function calculateUnitCost() {
 }
 
 function updateHqHpLine() {
-  const hpLine = q('#hqHpLine');
-  if (!hpLine) return;
   const key = state.playerColors[state.currentPlayerIndex];
   const hq = state.hqs && state.hqs.find(h => h.colorKey === key);
-  if (!hq) { hpLine.textContent = ''; return; }
-  hpLine.textContent = `${hq.hp} / ${hq.hpMax}`;
-  hpLine.style.color = '#39ff14';
-  hpLine.style.fontWeight = '800';
-  const energyLine = q('#hqEnergyLine');
-  if (energyLine) energyLine.textContent = `${hq.energy} / ${hq.energyMax}`;
+  if (!hq) return;
+  
+  // Mettre à jour les nouveaux affichages dans le panneau de création
+  const hqHpDisplay = q('#hqHpDisplay');
+  if (hqHpDisplay) hqHpDisplay.textContent = `${hq.hp} / ${hq.hpMax}`;
+  
+  const hqEnergyDisplay = q('#hqEnergyDisplay');
+  if (hqEnergyDisplay) hqEnergyDisplay.textContent = `${hq.energy} / ${hq.energyMax}`;
+  
   updateCreateButtonState(); // Mettre à jour le bouton quand l'énergie change
 }
 
