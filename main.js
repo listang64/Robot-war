@@ -21,7 +21,7 @@ const state = {
   tiles: null, // 2D array: true=wall, false=floor
   spawns: [],
   hqs: [],
-  units: [], // { id, ownerIndex, x, y, hp, recentTrail, lastDir, anim }
+  units: [], // { id, ownerIndex, x, y, hp, recentTrail, lastDir, anim, lastAttackTime }
   programs: {}, // key unitId -> number[] commands
   explosions: [], // { x, y, startTime, duration, particles: [{x, y, vx, vy, life}] }
   simIntervalId: null,
@@ -645,12 +645,26 @@ document.addEventListener('click', (e) => {
   if (unitAt(gx, gy)) return;
   const ownerIndex = Math.max(0, state.playerColors.indexOf(devSpawnSelection.colorKey));
   const idNum = state.nextUnitId++;
-  // Les unités créées via le développeur ont toujours 2 modules de mouvement
+  // Les unités créées via le développeur ont des modules prédéfinis
   const modules = [
+    // 4 modules de mouvement
     { type: 'movement', hp: 100, maxHp: 100 },
-    { type: 'movement', hp: 100, maxHp: 100 }
+    { type: 'movement', hp: 100, maxHp: 100 },
+    { type: 'movement', hp: 100, maxHp: 100 },
+    { type: 'movement', hp: 100, maxHp: 100 },
+    // 2 modules de bouclier
+    { type: 'shield', hp: 100, maxHp: 100 },
+    { type: 'shield', hp: 100, maxHp: 100 },
+    // 2 modules d'attaque
+    { type: 'attack', hp: 100, maxHp: 100 },
+    { type: 'attack', hp: 100, maxHp: 100 }
   ];
-  state.units.push({ id: idNum, ownerIndex, x: gx, y: gy, hp: 1, modules: modules, recentTrail: [], lastDir: null, anim: null });
+  state.units.push({ id: idNum, ownerIndex, x: gx, y: gy, hp: 1, modules: modules, recentTrail: [], lastDir: null, anim: null, lastAttackTime: null });
+  
+  // Programmer automatiquement l'unité avec la séquence: ID 6 11 5 12 15 2
+  state.programs[String(idNum)] = [6, 11, 5, 12, 15, 2];
+  console.log(`Unité développeur ${idNum} créée avec modules prédéfinis et programmée automatiquement`);
+  
   const canvas2 = q('#game'); if (canvas2) drawScene(canvas2);
   devSpawnSelection = null;
   const ov = q('#devOverlay'); if (ov) ov.classList.remove('visible');
@@ -992,32 +1006,94 @@ function processAdvancedCommands(u, cmds) {
 function processAttackCommand(u) {
   const nearestEnemy = findNearestEnemyUnit(u);
   if (!nearestEnemy) {
-    console.log(`Unité ${u.id}: Aucun ennemi à attaquer`);
-    return { moved: false };
+    console.log(`Unité ${u.id}: Aucun ennemi à attaquer, retour à l'exploration`);
+    // Si pas d'ennemi, retourner à l'exploration
+    return executeExploreAction(u);
   }
   
   // Calculer la distance
   const distance = Math.abs(u.x - nearestEnemy.x) + Math.abs(u.y - nearestEnemy.y);
   
-  // Si l'ennemi est adjacent (distance 1), attaquer
-  if (distance <= 1) {
-    const attackDamage = calculateAttackDamage(u);
-    if (attackDamage > 0) {
-      console.log(`Unité ${u.id} attaque l'unité ${nearestEnemy.id} pour ${attackDamage} dégâts`);
-      damageUnit(nearestEnemy, attackDamage);
-      
-      // Créer une petite explosion pour l'effet visuel
-      createExplosion(nearestEnemy.x, nearestEnemy.y);
-      
-      return { moved: false }; // L'attaque ne compte pas comme un mouvement
+  // Vérifier si l'ennemi est à portée d'attaque
+  let canAttack = false;
+  
+  if (nearestEnemy.type === 'unit') {
+    // Pour les unités : distance 1 (adjacent)
+    canAttack = distance <= 1;
+  } else if (nearestEnemy.type === 'hq') {
+    // Pour les QG : distance au périmètre du QG (HQ_PERIM_RADIUS = 5)
+    canAttack = distance <= HQ_PERIM_RADIUS;
+    console.log(`Unité ${u.id} distance au QG: ${distance}, périmètre: ${HQ_PERIM_RADIUS}, peut attaquer: ${canAttack}`);
+  }
+  
+  if (canAttack) {
+    const now = performance.now();
+    const attackCooldown = 1000; // 1 seconde entre les attaques
+    
+    // Vérifier si assez de temps s'est écoulé depuis la dernière attaque
+    if (!u.lastAttackTime || (now - u.lastAttackTime) >= attackCooldown) {
+      const attackDamage = calculateAttackDamage(u);
+      console.log(`Unité ${u.id}: Calcul dégâts d'attaque = ${attackDamage}`);
+      if (attackDamage > 0) {
+        if (nearestEnemy.type === 'unit') {
+          // Attaquer une unité
+          console.log(`Unité ${u.id} attaque l'unité ${nearestEnemy.target.id} pour ${attackDamage} dégâts`);
+          damageUnit(nearestEnemy.target, attackDamage);
+        } else if (nearestEnemy.type === 'hq') {
+          // Attaquer un QG
+          console.log(`Unité ${u.id} attaque le QG ${nearestEnemy.target.colorKey} pour ${attackDamage} dégâts (distance: ${distance})`);
+          damageHQ(nearestEnemy.target, attackDamage);
+        }
+        
+        // Enregistrer le temps de cette attaque
+        u.lastAttackTime = now;
+        
+        // Créer une petite explosion pour l'effet visuel
+        createAttackExplosion(nearestEnemy.x, nearestEnemy.y);
+        
+        return { moved: false }; // L'attaque ne compte pas comme un mouvement
+      } else {
+        // Plus de modules d'attaque fonctionnels, retourner à l'exploration
+        console.log(`Unité ${u.id}: Plus de modules d'attaque, retour à l'exploration`);
+        return executeExploreAction(u);
+      }
+    } else {
+      // En attente du cooldown, ne pas bouger
+      const remainingCooldown = Math.ceil((attackCooldown - (now - u.lastAttackTime)) / 1000);
+      console.log(`Unité ${u.id} en cooldown d'attaque (${remainingCooldown}s restantes)`);
+      return { moved: false };
     }
   } else {
     // Se déplacer vers l'ennemi
+    console.log(`Unité ${u.id} se déplace vers ${nearestEnemy.type} (distance: ${distance})`);
     const moved = moveTowardTarget(u, nearestEnemy.x, nearestEnemy.y);
     return { moved };
   }
   
   return { moved: false };
+}
+
+// Vérifie si une unité est en train d'attaquer un QG
+function isUnitAttackingHQ(u) {
+  const nearestEnemy = findNearestEnemyUnit(u);
+  if (!nearestEnemy || nearestEnemy.type !== 'hq') return false;
+  
+  const distance = Math.abs(u.x - nearestEnemy.x) + Math.abs(u.y - nearestEnemy.y);
+  return distance <= HQ_PERIM_RADIUS; // Si dans le périmètre d'attaque du QG
+}
+
+// Vérifie si une unité est en train d'attaquer (QG ou autre unité)
+function isUnitAttacking(u) {
+  const nearestEnemy = findNearestEnemyUnit(u);
+  if (!nearestEnemy) return false;
+  
+  const distance = Math.abs(u.x - nearestEnemy.x) + Math.abs(u.y - nearestEnemy.y);
+  
+  if (nearestEnemy.type === 'hq') {
+    return distance <= HQ_PERIM_RADIUS; // Attaque QG
+  } else {
+    return distance <= 3; // Attaque unité - plus large que la portée d'attaque pour inclure l'approche
+  }
 }
 
 // Traite les commandes conditionnelles (SI...ALORS...SINON)
@@ -1033,15 +1109,21 @@ function processConditionalCommand(u, cmds, siIndex) {
     return null;
   }
   
-  // D'abord, exécuter les commandes avant SI (comme l'exploration)
+  // Vérifier si l'unité est déjà en train d'attaquer (QG ou unité)
+  const isAttackingEnemy = isUnitAttacking(u);
+  
+  // D'abord, exécuter les commandes avant SI (comme l'exploration) seulement si pas en train d'attaquer
   const commandesAvantSI = cmds.slice(0, siIndex);
   console.log(`Unité ${u.id}: Commandes avant SI:`, commandesAvantSI);
+  console.log(`Unité ${u.id}: En train d'attaquer:`, isAttackingEnemy);
   
   let hasMoved = false;
-  if (commandesAvantSI.length > 0) {
+  if (commandesAvantSI.length > 0 && !isAttackingEnemy) {
     const resultPrelim = executeAction(u, commandesAvantSI);
     console.log(`Unité ${u.id}: Résultat commandes préliminaires:`, resultPrelim);
     hasMoved = resultPrelim && resultPrelim.moved;
+  } else if (isAttackingEnemy) {
+    console.log(`Unité ${u.id}: Attaque en cours, pas d'exploration préliminaire`);
   }
   
   // Extraire la condition (entre SI et ALORS)
@@ -1064,10 +1146,12 @@ function processConditionalCommand(u, cmds, siIndex) {
     // Exécuter la partie SINON
     actionToExecute = cmds.slice(sinonIndex + 1);
   } else {
-    // Pas de SINON et condition fausse : continuer les commandes préliminaires (explorer)
-    if (!hasMoved && commandesAvantSI.length > 0) {
+    // Pas de SINON et condition fausse : continuer les commandes préliminaires (explorer) sauf si on attaque
+    if (!hasMoved && commandesAvantSI.length > 0 && !isAttackingEnemy) {
       console.log(`Unité ${u.id}: Condition fausse, continuation de l'exploration`);
       actionToExecute = commandesAvantSI;
+    } else if (isAttackingEnemy) {
+      console.log(`Unité ${u.id}: En attaque, pas d'exploration automatique`);
     }
   }
   
@@ -1105,16 +1189,25 @@ function evaluateCondition(u, condition) {
   return false;
 }
 
-// Détecte s'il y a un robot ennemi à proximité
+// Détecte s'il y a une unité ennemie (robot ou QG) à proximité
 function detectEnemyUnit(u) {
-  const detectionRange = 3; // Portée de détection
-  const enemies = state.units.filter(unit => 
+  const detectionRange = 4; // Portée de détection (augmentée de 1)
+  
+  // Détecter les unités ennemies
+  const enemyUnits = state.units.filter(unit => 
     unit.ownerIndex !== u.ownerIndex &&
     Math.abs(unit.x - u.x) <= detectionRange &&
     Math.abs(unit.y - u.y) <= detectionRange
   );
   
-  return enemies.length > 0;
+  // Détecter les QG ennemis
+  const enemyHQs = state.hqs.filter(hq => 
+    hq.colorKey !== state.playerColors[u.ownerIndex] &&
+    Math.abs(hq.cx - u.x) <= detectionRange &&
+    Math.abs(hq.cy - u.y) <= detectionRange
+  );
+  
+  return enemyUnits.length > 0 || enemyHQs.length > 0;
 }
 
 // Détecte s'il y a un QG à proximité
@@ -1224,19 +1317,28 @@ function executeAction(u, action) {
   return { moved: false };
 }
 
-// Trouve l'unité ennemie la plus proche
+// Trouve la cible ennemie la plus proche (unité ou QG)
 function findNearestEnemyUnit(u) {
-  const enemies = state.units.filter(unit => unit.ownerIndex !== u.ownerIndex);
-  if (enemies.length === 0) return null;
-  
   let nearest = null;
   let minDistance = Infinity;
   
+  // Chercher parmi les unités ennemies
+  const enemies = state.units.filter(unit => unit.ownerIndex !== u.ownerIndex);
   for (const enemy of enemies) {
     const distance = Math.abs(u.x - enemy.x) + Math.abs(u.y - enemy.y);
     if (distance < minDistance) {
       minDistance = distance;
-      nearest = enemy;
+      nearest = { type: 'unit', target: enemy, x: enemy.x, y: enemy.y };
+    }
+  }
+  
+  // Chercher parmi les QG ennemis
+  const enemyHQs = state.hqs.filter(hq => hq.colorKey !== state.playerColors[u.ownerIndex]);
+  for (const hq of enemyHQs) {
+    const distance = Math.abs(u.x - hq.cx) + Math.abs(u.y - hq.cy);
+    if (distance < minDistance) {
+      minDistance = distance;
+      nearest = { type: 'hq', target: hq, x: hq.cx, y: hq.cy };
     }
   }
   
@@ -1245,10 +1347,50 @@ function findNearestEnemyUnit(u) {
 
 // Calcule les dégâts d'attaque basés sur les modules d'attaque
 function calculateAttackDamage(u) {
-  if (!u.modules || u.modules.length === 0) return 0;
+  if (!u.modules || u.modules.length === 0) {
+    console.log(`Unité ${u.id}: Aucun module`);
+    return 0;
+  }
   
   const attackModules = u.modules.filter(m => m.type === 'attack' && m.hp > 0);
+  console.log(`Unité ${u.id}: ${attackModules.length} modules d'attaque fonctionnels`);
   return attackModules.length * 30; // 30 dégâts par module d'attaque
+}
+
+// Applique des dégâts à un QG
+function damageHQ(hq, damage) {
+  if (!hq) return;
+  
+  const oldHp = hq.hp || 0;
+  hq.hp = Math.max(0, oldHp - damage);
+  
+  console.log(`QG ${hq.colorKey} : ${oldHp} -> ${hq.hp} HP (${damage} dégâts)`);
+  
+  // Mettre à jour l'affichage si c'est le QG du joueur actuel
+  if (hq.colorKey === state.playerColors[state.currentPlayerIndex]) {
+    updateHqHpLine();
+  }
+  
+  // Si le QG est détruit, créer une grosse explosion et le supprimer
+  if (hq.hp <= 0) {
+    console.log(`💥 QG ${hq.colorKey} détruit !`);
+    
+    // Créer une grosse explosion au centre du QG
+    createHQExplosion(hq.cx, hq.cy);
+    
+    // Supprimer le QG de la liste
+    const hqIndex = state.hqs.findIndex(h => h.colorKey === hq.colorKey);
+    if (hqIndex !== -1) {
+      state.hqs.splice(hqIndex, 1);
+      console.log(`QG ${hq.colorKey} retiré de la carte`);
+    }
+    
+    // Redessiner la scène
+    const canvas = q('#game');
+    if (canvas) drawScene(canvas);
+    
+    // TODO: Logique de fin de partie/victoire
+  }
 }
 
 // Déplace une unité vers une cible
@@ -2583,7 +2725,65 @@ function createExplosion(tileX, tileY) {
   });
 }
 
-// Applique des dégâts à une unité en priorisant les modules de bouclier
+// Crée une animation d'explosion réduite pour les attaques
+function createAttackExplosion(tileX, tileY) {
+  const now = performance.now();
+  const duration = 600; // Durée plus courte pour l'attaque
+  const particleCount = 8; // Moins de particules
+  const particles = [];
+  
+  // Créer les particules avec des directions aléatoires mais vitesse réduite
+  for (let i = 0; i < particleCount; i++) {
+    const angle = (Math.PI * 2 * i) / particleCount + (Math.random() - 0.5) * 0.5;
+    const speed = (0.5 + Math.random() * 1.0) * 0.5; // Vitesse réduite de moitié
+    particles.push({
+      x: 0, // Position relative au centre
+      y: 0,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      life: 1.0 // 1.0 = vivant, 0.0 = mort
+    });
+  }
+  
+  state.explosions.push({
+    tileX,
+    tileY,
+    startTime: now,
+    duration,
+    particles
+  });
+}
+
+// Crée une grosse explosion pour la destruction d'un QG
+function createHQExplosion(tileX, tileY) {
+  const now = performance.now();
+  const duration = 2000; // Explosion plus longue
+  const particleCount = 20; // Plus de particules
+  const particles = [];
+  
+  // Créer les particules avec une vitesse plus élevée pour une grosse explosion
+  for (let i = 0; i < particleCount; i++) {
+    const angle = (Math.PI * 2 * i) / particleCount + (Math.random() - 0.5) * 0.5;
+    const speed = 1.0 + Math.random() * 2.0; // Vitesse plus élevée
+    particles.push({
+      x: 0, // Position relative au centre
+      y: 0,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      life: 1.0 // 1.0 = vivant, 0.0 = mort
+    });
+  }
+  
+  state.explosions.push({
+    tileX,
+    tileY,
+    startTime: now,
+    duration,
+    particles
+  });
+}
+
+// Applique des dégâts à une unité avec ciblage aléatoire des modules
 function damageUnit(unit, damage) {
   if (!unit.modules || unit.modules.length === 0) return;
   
@@ -2599,29 +2799,39 @@ function damageUnit(unit, damage) {
   
   let remainingDamage = actualDamage;
   
-  // Phase 1: Endommager les boucliers en priorité
+  // Phase 1: Cibler aléatoirement les boucliers d'abord
   const shields = unit.modules.filter(m => m.type === 'shield' && m.hp > 0);
-  for (const shield of shields) {
-    if (remainingDamage <= 0) break;
+  if (shields.length > 0) {
+    // Mélanger aléatoirement l'ordre des boucliers
+    const shuffledShields = [...shields].sort(() => Math.random() - 0.5);
     
-    const damageToApply = Math.min(remainingDamage, shield.hp);
-    shield.hp -= damageToApply;
-    remainingDamage -= damageToApply;
-    
-    console.log(`Bouclier endommagé: ${shield.hp}/100 HP restants`);
-  }
-  
-  // Phase 2: Si il reste des dégâts, endommager les autres modules
-  if (remainingDamage > 0) {
-    const otherModules = unit.modules.filter(m => m.type !== 'shield' && m.hp > 0);
-    for (const module of otherModules) {
+    for (const shield of shuffledShields) {
       if (remainingDamage <= 0) break;
       
-      const damageToApply = Math.min(remainingDamage, module.hp);
-      module.hp -= damageToApply;
+      const damageToApply = Math.min(remainingDamage, shield.hp);
+      shield.hp -= damageToApply;
       remainingDamage -= damageToApply;
       
-      console.log(`Module ${module.type} endommagé: ${module.hp}/100 HP restants`);
+      console.log(`Bouclier ciblé aléatoirement: ${shield.hp}/100 HP restants`);
+    }
+  }
+  
+  // Phase 2: Si il reste des dégâts, cibler aléatoirement les autres modules
+  if (remainingDamage > 0) {
+    const otherModules = unit.modules.filter(m => m.type !== 'shield' && m.hp > 0);
+    if (otherModules.length > 0) {
+      // Mélanger aléatoirement l'ordre des autres modules
+      const shuffledOtherModules = [...otherModules].sort(() => Math.random() - 0.5);
+      
+      for (const module of shuffledOtherModules) {
+        if (remainingDamage <= 0) break;
+        
+        const damageToApply = Math.min(remainingDamage, module.hp);
+        module.hp -= damageToApply;
+        remainingDamage -= damageToApply;
+        
+        console.log(`Module ${module.type} ciblé aléatoirement: ${module.hp}/100 HP restants`);
+      }
     }
   }
   
@@ -2977,6 +3187,7 @@ function spawnUnitFromHQ(hq, ownerIndex, offsetIdx = 0) {
     headingTo: headingAng,
     headingStart: now,
     headingEnd: now + tileDuration,
+    lastAttackTime: null,
   };
   state.units.push(unit);
   const pm = state.playerMaps[ownerIndex];
