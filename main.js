@@ -119,7 +119,7 @@ function startGame() {
   state.units = [];
   // init cartographies partagées
   state.playerMaps = Array.from({ length: state.players }, () => ({ knownWalls: new Set(), knownFree: new Set(), visitCounts: new Map() }));
-  populateFullMapKnowledge();
+  // populateFullMapKnowledge(); // Commenté: les joueurs doivent explorer pour découvrir la carte
   // Plus de spawn initial automatique
   // Le jeu démarre en pause
   state.isPaused = true;
@@ -146,7 +146,7 @@ function regenerateMapKeepPause() {
   state.nextUnitId = 1; // repart des IDs 1, 2, 3...
   state.programs = {}; // nettoie les anciens programmes liés à d'anciens IDs
   state.playerMaps = Array.from({ length: state.players }, () => ({ knownWalls: new Set(), knownFree: new Set(), visitCounts: new Map() }));
-  populateFullMapKnowledge();
+  // populateFullMapKnowledge(); // Commenté: les joueurs doivent explorer pour découvrir la carte
   // Plus de spawn initial automatique
   // Assure pause et overlay visibles
   state.isPaused = wasPaused || true;
@@ -661,6 +661,12 @@ document.addEventListener('click', (e) => {
   ];
   state.units.push({ id: idNum, ownerIndex, x: gx, y: gy, hp: 1, modules: modules, recentTrail: [], lastDir: null, anim: null, lastAttackTime: null });
   
+  // Ajouter la position de spawn à la connaissance du joueur
+  const pm = state.playerMaps[ownerIndex];
+  if (pm && pm.knownFree) {
+    pm.knownFree.add(`${gx},${gy}`);
+  }
+  
   // Programmer automatiquement l'unité avec la séquence: ID 6 11 5 12 15 2
   state.programs[String(idNum)] = [6, 11, 5, 12, 15, 2];
   console.log(`Unité développeur ${idNum} créée avec modules prédéfinis et programmée automatiquement`);
@@ -806,6 +812,60 @@ function stepSimulation(dt = 0) {
       }
       // pas de QG? on tombera sur explorer plus bas si présent
     }
+    
+    // Commande 7 + 20 (QG ennemie): aller vers le QG ennemie le plus proche
+    if (cmds[0] === 7 && cmds[1] === 20) {
+      const nearestEnemyHQ = findNearestEnemyHQ(u);
+      if (nearestEnemyHQ) {
+        console.log(`Unité ${u.id}: Se déplace vers QG ennemie ${nearestEnemyHQ.colorKey} à (${nearestEnemyHQ.cx}, ${nearestEnemyHQ.cy})`);
+        
+        // Utiliser seulement la connaissance du joueur pour naviguer vers QG ennemie
+        const stepTo = planStepToHQUsingSharedMap(u, nearestEnemyHQ);
+        if (stepTo) {
+          console.log(`Unité ${u.id}: Chemin connu trouvé vers QG ennemie`);
+          const now = performance.now();
+          const speedModifier = getSpeedModifier(u);
+          const baseDuration = Math.max(120, Math.floor(1000 / state.unitSpeedTilesPerSec));
+          const tileDuration = speedModifier > 0 ? Math.floor(baseDuration / speedModifier) : baseDuration * 10;
+          u.anim = { fromX: u.x, fromY: u.y, toX: stepTo.x, toY: stepTo.y, startTime: now, endTime: now + tileDuration };
+          const ang = Math.atan2(stepTo.y - u.y, stepTo.x - u.x);
+          u.headingFrom = (u.headingTo ?? ang);
+          u.headingTo = ang;
+          u.headingStart = now; u.headingEnd = now + tileDuration;
+          updateRecentTrail(u, u.x, u.y);
+          u.x = stepTo.x; u.y = stepTo.y; u.lastDir = [Math.sign(stepTo.x - u.anim.fromX), Math.sign(stepTo.y - u.anim.fromY)]; moved = true;
+          const pm2 = state.playerMaps[u.ownerIndex]; if (pm2 && pm2.knownFree) pm2.knownFree.add(`${u.x},${u.y}`);
+          continue;
+        } else {
+          console.log(`Unité ${u.id}: Aucun chemin connu vers QG ennemie, exploration pour le découvrir`);
+          // Pas de chemin connu: explorer pour découvrir le chemin vers le QG ennemie
+          const pm = state.playerMaps[u.ownerIndex];
+          if (pm) {
+            const k = `${u.x},${u.y}`;
+            pm.visitCounts.set(k, (pm.visitCounts.get(k) || 0) + 1);
+            
+            // Explorer en direction générale du QG ennemie
+            const dirX = nearestEnemyHQ.cx > u.x ? 1 : (nearestEnemyHQ.cx < u.x ? -1 : 0);
+            const dirY = nearestEnemyHQ.cy > u.y ? 1 : (nearestEnemyHQ.cy < u.y ? -1 : 0);
+            
+            // Essayer d'explorer dans la direction du QG
+            const exploreTargetX = u.x + dirX * 5;
+            const exploreTargetY = u.y + dirY * 5;
+            
+            const didMove = moveTowardEnemyHQWithPlayerKnowledge(u, exploreTargetX, exploreTargetY);
+            if (didMove) moved = true;
+            continue;
+          }
+        }
+      } else {
+        console.log(`Unité ${u.id}: Aucun QG ennemie trouvé, exploration`);
+        // Fallback: explorer pour chercher des QG ennemis
+        const didMove = moveTowardOrExploreInline(u, u.x + Math.random() * 10 - 5, u.y + Math.random() * 10 - 5);
+        if (didMove) moved = true;
+        continue;
+      }
+    }
+    
     // Commande 6: explorer (avec mémoire locale des visites)
     if (cmds.includes(6)) {
       const pm = state.playerMaps[u.ownerIndex];
@@ -980,10 +1040,13 @@ function moveTowardOrExploreInline(u, tx, ty) {
 function processAdvancedCommands(u, cmds) {
   // Nouvelles commandes:
   // 5 = DETECTE (suivi de la cible à détecter)
+  // 7 = DEPLACER (suivi de la cible vers laquelle se déplacer)
   // 11 = SI
   // 15 = ALORS 
   // 14 = SINON
-  // 12 = ROBOT_ENNEMIE
+  // 12 = ROBOT_ENNEMIE (unité ennemie)
+  // 18 = QG (son propre QG)
+  // 20 = QG_ENNEMIE (QG ennemie)
   // 2 = ATTAQUE
   
   // Traiter les commandes dans l'ordre
@@ -1176,13 +1239,17 @@ function evaluateCondition(u, condition) {
   
   // 5 = DETECTE
   if (command === 5) {
-    // 12 = ROBOT_ENNEMIE
+    // 12 = ROBOT_ENNEMIE (unité ennemie)
     if (target === 12) {
       return detectEnemyUnit(u);
     }
     // 18 = QG (détection du QG)
     if (target === 18) {
       return detectHQ(u);
+    }
+    // 20 = QG_ENNEMIE (QG ennemie)
+    if (target === 20) {
+      return detectEnemyHQ(u);
     }
   }
   
@@ -1219,6 +1286,21 @@ function detectHQ(u) {
     Math.abs(hq.cy - u.y) <= detectionRange
   );
   
+  return enemyHQs.length > 0;
+}
+
+// Détecte s'il y a un QG ennemie à proximité (spécifiquement)
+function detectEnemyHQ(u) {
+  const detectionRange = 4; // Portée de détection pour les QG ennemis
+  
+  // Détecter seulement les QG ennemis (pas les siens)
+  const enemyHQs = state.hqs.filter(hq => 
+    hq.colorKey !== state.playerColors[u.ownerIndex] &&
+    Math.abs(hq.cx - u.x) <= detectionRange &&
+    Math.abs(hq.cy - u.y) <= detectionRange
+  );
+  
+  console.log(`Unité ${u.id}: Détection QG ennemie - ${enemyHQs.length} QG(s) ennemie(s) détecté(s)`);
   return enemyHQs.length > 0;
 }
 
@@ -1313,6 +1395,89 @@ function executeAction(u, action) {
     }
   }
   
+  // Action de déplacement vers QG ennemie [7, 20]
+  if (action.length === 2 && action[0] === 7 && action[1] === 20) {
+    console.log(`Unité ${u.id}: Déplacement vers QG ennemie`);
+    
+    // Vérifier si l'unité peut se déplacer
+    if (!hasWorkingMovementModule(u)) {
+      console.log(`Unité ${u.id}: Pas de module de mouvement fonctionnel`);
+      return { moved: false };
+    }
+    
+    const nearestEnemyHQ = findNearestEnemyHQ(u);
+    if (nearestEnemyHQ) {
+      console.log(`Unité ${u.id}: QG ennemie ${nearestEnemyHQ.colorKey} trouvé à (${nearestEnemyHQ.cx}, ${nearestEnemyHQ.cy})`);
+      
+      // Utiliser seulement la connaissance du joueur pour naviguer vers QG ennemie
+      const stepTo = planStepToHQUsingSharedMap(u, nearestEnemyHQ);
+      if (stepTo) {
+        console.log(`Unité ${u.id}: Chemin connu trouvé vers QG ennemie`);
+        const now = performance.now();
+        const speedModifier = getSpeedModifier(u);
+        const baseDuration = Math.max(120, Math.floor(1000 / state.unitSpeedTilesPerSec));
+        const tileDuration = speedModifier > 0 ? Math.floor(baseDuration / speedModifier) : baseDuration * 10;
+        u.anim = { fromX: u.x, fromY: u.y, toX: stepTo.x, toY: stepTo.y, startTime: now, endTime: now + tileDuration };
+        const ang = Math.atan2(stepTo.y - u.y, stepTo.x - u.x);
+        u.headingFrom = (u.headingTo ?? ang);
+        u.headingTo = ang;
+        u.headingStart = now; u.headingEnd = now + tileDuration;
+        updateRecentTrail(u, u.x, u.y);
+        u.x = stepTo.x; u.y = stepTo.y; u.lastDir = [Math.sign(stepTo.x - u.anim.fromX), Math.sign(stepTo.y - u.anim.fromY)];
+        const pm2 = state.playerMaps[u.ownerIndex]; if (pm2 && pm2.knownFree) pm2.knownFree.add(`${u.x},${u.y}`);
+        return { moved: true };
+      } else {
+        console.log(`Unité ${u.id}: Aucun chemin connu vers QG ennemie, exploration pour le découvrir`);
+        // Pas de chemin connu: explorer pour découvrir le chemin vers le QG ennemie
+        const pm = state.playerMaps[u.ownerIndex];
+        if (pm) {
+          const k = `${u.x},${u.y}`;
+          pm.visitCounts.set(k, (pm.visitCounts.get(k) || 0) + 1);
+          
+          // Explorer en direction générale du QG ennemie
+          const dirX = nearestEnemyHQ.cx > u.x ? 1 : (nearestEnemyHQ.cx < u.x ? -1 : 0);
+          const dirY = nearestEnemyHQ.cy > u.y ? 1 : (nearestEnemyHQ.cy < u.y ? -1 : 0);
+          
+          // Essayer d'explorer dans la direction du QG
+          const exploreTargetX = u.x + dirX * 5;
+          const exploreTargetY = u.y + dirY * 5;
+          
+          const didMove = moveTowardEnemyHQWithPlayerKnowledge(u, exploreTargetX, exploreTargetY);
+          return { moved: didMove };
+        }
+        return { moved: false };
+      }
+    } else {
+      console.log(`Unité ${u.id}: Aucun QG ennemie trouvé, exploration aléatoire`);
+      // Fallback: explorer pour chercher des QG ennemis
+      const targetX = u.x + Math.floor(Math.random() * 21) - 10; // -10 à +10
+      const targetY = u.y + Math.floor(Math.random() * 21) - 10;
+      const didMove = moveTowardOrExploreInline(u, targetX, targetY);
+      return { moved: didMove };
+    }
+  }
+  
+  // Action de déplacement vers son propre QG [7, 18]
+  if (action.length === 2 && action[0] === 7 && action[1] === 18) {
+    console.log(`Unité ${u.id}: Déplacement vers son QG`);
+    
+    // Vérifier si l'unité peut se déplacer
+    if (!hasWorkingMovementModule(u)) {
+      console.log(`Unité ${u.id}: Pas de module de mouvement fonctionnel`);
+      return { moved: false };
+    }
+    
+    const myHq = state.hqs.find(h => h.colorKey === state.playerColors[u.ownerIndex]);
+    if (myHq) {
+      console.log(`Unité ${u.id}: Son QG ${myHq.colorKey} trouvé à (${myHq.cx}, ${myHq.cy})`);
+      const didMove = moveTowardOrExploreInline(u, myHq.cx, myHq.cy);
+      return { moved: didMove };
+    } else {
+      console.log(`Unité ${u.id}: Son QG non trouvé, exploration`);
+      return executeExploreAction(u);
+    }
+  }
+  
   console.log(`Unité ${u.id}: Action inconnue:`, action);
   return { moved: false };
 }
@@ -1339,6 +1504,24 @@ function findNearestEnemyUnit(u) {
     if (distance < minDistance) {
       minDistance = distance;
       nearest = { type: 'hq', target: hq, x: hq.cx, y: hq.cy };
+    }
+  }
+  
+  return nearest;
+}
+
+// Trouve le QG ennemie le plus proche
+function findNearestEnemyHQ(u) {
+  let nearest = null;
+  let minDistance = Infinity;
+  
+  // Chercher seulement parmi les QG ennemis
+  const enemyHQs = state.hqs.filter(hq => hq.colorKey !== state.playerColors[u.ownerIndex]);
+  for (const hq of enemyHQs) {
+    const distance = Math.abs(u.x - hq.cx) + Math.abs(u.y - hq.cy);
+    if (distance < minDistance) {
+      minDistance = distance;
+      nearest = hq; // Retourner directement l'objet HQ
     }
   }
   
@@ -1611,9 +1794,12 @@ function planStepToHQUsingSharedMap(u, hq) {
   // Les unités ne peuvent jamais traverser les cellules des QG, même pour aller au centre
   const isKnownWalkable = (x, y) => {
     if (!isInBounds(x, y)) return false;
-    // Avec connaissance globale: on s'appuie sur la carte réelle
-    if (state.tiles[y][x]) return false;
+    // Utiliser seulement la connaissance du joueur (pas la carte globale)
+    const key = `${x},${y}`;
+    if (knownWalls.has(key)) return false; // Mur connu par ce joueur
     if (isHQCell(x, y)) return false; // Aucune cellule HQ n'est traversable
+    // Si la case n'est pas dans knownFree ET pas explorée, on peut pas la traverser
+    if (!knownFree.has(key)) return false; // Case non explorée par ce joueur
     return true;
   };
 
@@ -3667,6 +3853,243 @@ function isBlocked(x, y) {
   if (state.tiles && state.tiles[y][x]) return true; // mur
   if (isHQCell(x, y)) return true; // QG zone
   return false;
+}
+
+// Version de isBlocked qui utilise seulement la connaissance du joueur
+function isBlockedByPlayerKnowledge(x, y, playerIndex) {
+  if (!isInBounds(x, y)) return true;
+  if (isHQCell(x, y)) return true; // QG zone (connaissance globale acceptable)
+  
+  const pm = state.playerMaps[playerIndex];
+  if (!pm) return true; // Pas de carte = tout bloqué
+  
+  const key = `${x},${y}`;
+  // Si c'est un mur connu par le joueur, c'est bloqué
+  if (pm.knownWalls && pm.knownWalls.has(key)) return true;
+  
+  // Si ce n'est pas une case libre connue, on considère que c'est bloqué
+  if (!pm.knownFree || !pm.knownFree.has(key)) return true;
+  
+  return false;
+}
+
+// Version de moveTowardOrExploreInline qui utilise seulement la connaissance du joueur
+function moveTowardEnemyHQWithPlayerKnowledge(u, targetX, targetY) {
+  if (u.x === targetX && u.y === targetY) return false;
+  
+  const dirs = [ [1,0], [-1,0], [0,1], [0,-1], [1,1], [1,-1], [-1,1], [-1,-1] ];
+  const pm = state.playerMaps[u.ownerIndex];
+  if (!pm) return false;
+  
+  let best = null; 
+  let bestDist = Infinity;
+  
+  // Fonction pour vérifier si une case est accessible (connue libre OU inconnue mais pas mur connu)
+  const isAccessible = (x, y) => {
+    if (!isInBounds(x, y)) return false;
+    if (unitAt(x, y)) return false;
+    if (isHQCell(x, y)) return false; // QG zones non traversables
+    
+    const key = `${x},${y}`;
+    // Si c'est un mur connu, pas accessible
+    if (pm.knownWalls && pm.knownWalls.has(key)) return false;
+    
+    // Si c'est libre connu OU case inconnue, c'est accessible pour exploration
+    return true;
+  };
+  
+  // 1) D'abord vérifier si on peut avancer vers la cible sur cases connues libres (ET pas récemment visitées)
+  for (const d of dirs) {
+    const nx = u.x + d[0];
+    const ny = u.y + d[1];
+    
+    if (!isAccessible(nx, ny)) continue;
+    
+    // Éviter de revenir sur ses pas immédiatement
+    if (u.lastDir && d[0] === -u.lastDir[0] && d[1] === -u.lastDir[1]) continue;
+    
+    const key = `${nx},${ny}`;
+    // Éviter les cases récemment visitées pour ne pas tourner en rond
+    if (u.recentTrail && u.recentTrail.includes(key)) continue;
+    
+    // Préférer les cases connues libres qui rapprochent vraiment de la cible
+    if (pm.knownFree && pm.knownFree.has(key)) {
+      const newDist = Math.abs(targetX - nx) + Math.abs(targetY - ny);
+      const currentDist = Math.abs(targetX - u.x) + Math.abs(targetY - u.y);
+      // Seulement si ça rapproche vraiment
+      if (newDist < currentDist && newDist < bestDist) {
+        bestDist = newDist;
+        best = d;
+      }
+    }
+  }
+  
+  // 2) Si pas de progression connue, FORCER l'exploration de cases inconnues
+  if (!best) {
+    console.log(`Unité ${u.id}: Aucun progrès possible sur terrain connu, exploration forcée`);
+    
+    // Privilégier l'exploration en direction générale de la cible
+    const dirX = targetX > u.x ? 1 : (targetX < u.x ? -1 : 0);
+    const dirY = targetY > u.y ? 1 : (targetY < u.y ? -1 : 0);
+    
+    // Essayer d'abord la direction idéale vers la cible sur cases INCONNUES seulement
+    const idealDirs = [];
+    if (dirX !== 0 && dirY !== 0) idealDirs.push([dirX, dirY]); // Diagonale
+    if (dirX !== 0) idealDirs.push([dirX, 0]); // Horizontal
+    if (dirY !== 0) idealDirs.push([0, dirY]); // Vertical
+    
+    for (const d of idealDirs) {
+      const nx = u.x + d[0];
+      const ny = u.y + d[1];
+      
+      if (!isAccessible(nx, ny)) continue;
+      if (u.lastDir && d[0] === -u.lastDir[0] && d[1] === -u.lastDir[1]) continue;
+      
+      const key = `${nx},${ny}`;
+      // SEULEMENT les cases vraiment inconnues
+      if (!pm.knownFree || !pm.knownFree.has(key)) {
+        // Éviter les cases récemment visitées même si inconnues
+        if (u.recentTrail && u.recentTrail.includes(key)) continue;
+        
+        best = d;
+        console.log(`Unité ${u.id}: Exploration forcée vers case inconnue (${nx}, ${ny}) en direction cible`);
+        break;
+      }
+    }
+    
+    // Si toujours pas de direction idéale, essayer n'importe quelle case inconnue
+    if (!best) {
+      console.log(`Unité ${u.id}: Recherche de case inconnue quelconque`);
+      for (const d of dirs) {
+        const nx = u.x + d[0];
+        const ny = u.y + d[1];
+        
+        if (!isAccessible(nx, ny)) continue;
+        if (u.lastDir && d[0] === -u.lastDir[0] && d[1] === -u.lastDir[1]) continue;
+        
+        const key = `${nx},${ny}`;
+        // SEULEMENT les cases vraiment inconnues
+        if (!pm.knownFree || !pm.knownFree.has(key)) {
+          // Éviter les cases récemment visitées même si inconnues
+          if (u.recentTrail && u.recentTrail.includes(key)) continue;
+          
+          best = d;
+          console.log(`Unité ${u.id}: Exploration forcée vers case inconnue quelconque (${nx}, ${ny})`);
+          break;
+        }
+      }
+    }
+    
+    // Dernier recours: ignorer le trail récent et explorer une case inconnue
+    if (!best) {
+      console.log(`Unité ${u.id}: Dernier recours - exploration sans restriction de trail`);
+      for (const d of dirs) {
+        const nx = u.x + d[0];
+        const ny = u.y + d[1];
+        
+        if (!isAccessible(nx, ny)) continue;
+        if (u.lastDir && d[0] === -u.lastDir[0] && d[1] === -u.lastDir[1]) continue;
+        
+        const key = `${nx},${ny}`;
+        // SEULEMENT les cases vraiment inconnues, ignorer trail
+        if (!pm.knownFree || !pm.knownFree.has(key)) {
+          best = d;
+          console.log(`Unité ${u.id}: Exploration forcée vers case inconnue (${nx}, ${ny}) - trail ignoré`);
+          break;
+        }
+      }
+    }
+  }
+  
+  // Dernier fallback: mouvement aléatoire vers n'importe quelle case libre
+  if (!best) {
+    console.log(`Unité ${u.id}: Aucune case inconnue trouvée, mouvement aléatoire forcé`);
+    for (const d of dirs) {
+      const nx = u.x + d[0];
+      const ny = u.y + d[1];
+      
+      if (!isInBounds(nx, ny)) continue;
+      if (unitAt(nx, ny)) continue;
+      if (u.lastDir && d[0] === -u.lastDir[0] && d[1] === -u.lastDir[1]) continue;
+      
+      const key = `${nx},${ny}`;
+      // Éviter aussi le trail récent même dans mouvement aléatoire
+      if (u.recentTrail && u.recentTrail.includes(key)) continue;
+      
+      // Accepter n'importe quelle case libre (connue ou non) sauf murs connus
+      if (!pm.knownWalls || !pm.knownWalls.has(key)) {
+        if (!isHQCell(nx, ny)) {
+          best = d;
+          console.log(`Unité ${u.id}: Mouvement aléatoire forcé vers (${nx}, ${ny})`);
+          break;
+        }
+      }
+    }
+  }
+  
+  // Ultime recours: autoriser le retour sur ses pas
+  if (!best) {
+    console.log(`Unité ${u.id}: Dernier recours - retour sur ses pas autorisé`);
+    for (const d of dirs) {
+      const nx = u.x + d[0];
+      const ny = u.y + d[1];
+      
+      if (!isInBounds(nx, ny)) continue;
+      if (unitAt(nx, ny)) continue;
+      
+      const key = `${nx},${ny}`;
+      // Accepter n'importe quelle case libre, même retour arrière
+      if (!pm.knownWalls || !pm.knownWalls.has(key)) {
+        if (!isHQCell(nx, ny)) {
+          best = d;
+          console.log(`Unité ${u.id}: Retour sur ses pas vers (${nx}, ${ny})`);
+          break;
+        }
+      }
+    }
+  }
+  
+  if (!best) {
+    console.log(`Unité ${u.id}: Complètement bloquée`);
+    return false;
+  }
+  
+  // Effectuer le mouvement
+  const nx = u.x + best[0];
+  const ny = u.y + best[1];
+  
+  // Vérifier si c'est réellement possible (pas de collision avec mur réel)
+  if (isBlocked(nx, ny)) {
+    console.log(`Unité ${u.id}: Case (${nx}, ${ny}) bloquée par obstacle, ajout aux murs connus`);
+    // Ajouter aux murs connus et ne pas bouger
+    if (pm.knownWalls) pm.knownWalls.add(`${nx},${ny}`);
+    return false;
+  }
+  
+  const now = performance.now();
+  const speedModifier = getSpeedModifier(u);
+  const baseDuration = 240;
+  const duration = speedModifier > 0 ? Math.floor(baseDuration / speedModifier) : baseDuration * 10;
+  
+  u.anim = { fromX: u.x, fromY: u.y, toX: nx, toY: ny, startTime: now, endTime: now + duration };
+  const ang = Math.atan2(ny - u.y, nx - u.x);
+  u.headingFrom = (u.headingTo ?? ang);
+  u.headingTo = ang;
+  u.headingStart = now; 
+  u.headingEnd = now + duration;
+  
+  updateRecentTrail(u, u.x, u.y);
+  u.x = nx; 
+  u.y = ny; 
+  u.lastDir = best;
+  
+  // Mettre à jour la connaissance du joueur
+  if (pm.knownFree) {
+    pm.knownFree.add(`${u.x},${u.y}`);
+  }
+  
+  console.log(`Unité ${u.id}: Déplacement réussi vers (${u.x}, ${u.y})`);
+  return true;
 }
 
 function lighten(hex, t) { return mix(hex, '#ffffff', t); }
