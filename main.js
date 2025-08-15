@@ -2276,7 +2276,7 @@ function calculateAttackDamage(u, isRanged = false) {
   } else {
     const attackModules = u.modules.filter(m => m.type === 'attack' && m.hp > 0);
     console.log(`Unité ${u.id}: ${attackModules.length} modules d'attaque C.A.C fonctionnels`);
-    return attackModules.length * 30; // 30 dégâts par module d'attaque C.A.C
+    return attackModules.length * 35; // 35 dégâts par module d'attaque C.A.C
   }
 }
 
@@ -3832,7 +3832,7 @@ function renderSpawnPanel() {
     style: 'font-size:15px;color:#cfd6e6;margin-bottom:4px;font-weight:600;' 
   });
   const rangedAttackCost = el('span', { 
-    textContent: '100 ⚡', 
+    textContent: '130 ⚡', 
     style: 'color:#ffd54a;font-size:14px;font-weight:800;' 
   });
   rangedAttackLabelContainer.append(rangedAttackLabel, rangedAttackCost);
@@ -4490,7 +4490,7 @@ function updateCreateButtonState() {
 }
 
 function calculateUnitCost() {
-  return state.selectedModules.movement * 50 + state.selectedModules.shield * 150 + state.selectedModules.attack * 80 + state.selectedModules.ranged_attack * 100; // 50 énergie par module de mouvement, 150 par module de bouclier, 80 par module d'attaque, 100 par module d'attaque à distance
+  return state.selectedModules.movement * 50 + state.selectedModules.shield * 150 + state.selectedModules.attack * 80 + state.selectedModules.ranged_attack * 130; // 50 énergie par module de mouvement, 150 par module de bouclier, 80 par module d'attaque, 130 par module d'attaque à distance
 }
 
 function updateHqHpLine() {
