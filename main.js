@@ -32,7 +32,7 @@ const state = {
   // Cartographie partagée par joueur
   playerMaps: [],
   // Sélection de modules pour la création d'unités
-  selectedModules: { movement: 0, shield: 0, attack: 0, ranged_attack: 0 }, // index -> { knownWalls:Set<string>, knownFree:Set<string>, visitCounts:Map<string,number> }
+  selectedModules: { movement: 0, shield: 0, attack: 0, ranged_attack: 0, heal: 0 }, // index -> { knownWalls:Set<string>, knownFree:Set<string>, visitCounts:Map<string,number> }
   nextUnitId: 1,
   nextLocalIdByPlayer: [],
   lastSimTime: 0,
@@ -256,6 +256,14 @@ function renderGame() {
   redCacBtn.addEventListener('click', () => selectDevSpawn('unit_cac', 'red'));
   devList.append(redCacBtn);
   
+  // Bouton spécial: Unité rouge soin avec 3 mouvements + 1 bouclier + 2 soins
+  const redHealBtn = el('button', { className: 'dev-special', title: 'Unité rouge soin: 3 mouvements, 1 bouclier, 2 soins' });
+  redHealBtn.textContent = 'Soin Rouge';
+  redHealBtn.style.backgroundColor = '#ff6666';
+  redHealBtn.style.color = 'white';
+  redHealBtn.addEventListener('click', () => selectDevSpawn('unit_soin_rouge', 'red'));
+  devList.append(redHealBtn);
+  
 
   
   // --- Bouton: -100 PV au QG du joueur courant ---
@@ -477,6 +485,7 @@ function nextPlayer() {
   state.selectedModules.shield = 0;
   state.selectedModules.attack = 0;
   state.selectedModules.ranged_attack = 0;
+  state.selectedModules.heal = 0;
   updateModuleDisplay();
   updateEnergyCost();
   updateAttackButtonsState();
@@ -686,6 +695,17 @@ document.addEventListener('click', (e) => {
       { type: 'attack', hp: 100, maxHp: 100 }
     ];
 
+          } else if (devSpawnSelection.type === 'unit_soin_rouge') {
+          // Unité rouge soin: 3 mouvements + 1 bouclier + 2 soins
+          modules = [
+            { type: 'movement', hp: 100, maxHp: 100 },
+            { type: 'movement', hp: 100, maxHp: 100 },
+            { type: 'movement', hp: 100, maxHp: 100 },
+            { type: 'shield', hp: 100, maxHp: 100 },
+            { type: 'heal', hp: 100, maxHp: 100 },
+            { type: 'heal', hp: 100, maxHp: 100 }
+          ];
+
   } else {
     // Unité normale avec modules complets
     modules = [
@@ -721,7 +741,12 @@ document.addEventListener('click', (e) => {
     // Unité rouge CAC: programmation avancée
     state.programs[String(idNum)] = [6, 11, 5, 12, 15, 2, 14, 6];
     console.log(`Unité rouge ${devSpawnSelection.type} ${idNum} créée avec programmation avancée`);
-  } else {
+          } else if (devSpawnSelection.type === 'unit_soin_rouge') {
+          // Unité rouge soin: programmation de soin optimisée
+          // 6=explorer, 11=SI, 5=detect, 16=allié, 15=ALORS, 3=soigner, 6=explorer, 14=SINON, 6=explorer
+          state.programs[String(idNum)] = [6, 11, 5, 16, 15, 3, 6, 14, 6];
+          console.log(`Unité rouge soin ${idNum} créée avec programmation de soin optimisée`);
+        } else {
     // Unités normales: séquence complète
     state.programs[String(idNum)] = [6, 11, 5, 12, 15, 2];
     console.log(`Unité développeur ${idNum} créée avec modules prédéfinis et programmée automatiquement`);
@@ -1132,9 +1157,11 @@ function processAdvancedCommands(u, cmds) {
   // 15 = ALORS 
   // 14 = SINON
   // 12 = ROBOT_ENNEMIE (unité ennemie)
+  // 16 = ROBOT_ALLIE (unité alliée)
   // 18 = QG (son propre QG)
   // 20 = QG_ENNEMIE (QG ennemie)
   // 2 = ATTAQUE
+  // 3 = SOIGNER
   
   // Traiter les commandes dans l'ordre
   
@@ -1263,6 +1290,11 @@ function processAdvancedCommands(u, cmds) {
     return processAttackCommand(u);
   }
   
+  // Chercher une commande de soin directe
+  if (cmds.includes(3)) {
+    return processHealCommand(u);
+  }
+  
   return null; // Aucune commande avancée trouvée
 }
 
@@ -1315,6 +1347,70 @@ function fleeFromEnemy(u, enemy) {
 
   console.log(`Unité ${u.id}: Impossible de fuir, reste sur place`);
   return { moved: false };
+}
+
+// Traite les commandes de soins
+function processHealCommand(u) {
+  // Vérifier si l'unité a des modules de soins
+  const hasHeal = u.modules && u.modules.some(m => m.type === 'heal' && m.hp > 0);
+  if (!hasHeal) {
+    console.log(`Unité ${u.id}: Pas de modules de soins fonctionnels`);
+    return executeExploreAction(u);
+  }
+  
+  // Chercher l'unité alliée la plus proche qui a besoin de soins
+  const nearestAlly = findNearestAllyNeedingHeal(u);
+  if (!nearestAlly) {
+    console.log(`Unité ${u.id}: Aucune unité alliée à soigner trouvée`);
+    return executeExploreAction(u);
+  }
+  
+  const distance = Math.abs(u.x - nearestAlly.x) + Math.abs(u.y - nearestAlly.y);
+  
+  // Vérifier si à portée de soins (même distance que tir à distance: 6 cases)
+  if (distance <= 6) {
+    // Effectuer le soin
+    const now = performance.now();
+    const healCooldown = 500; // 0.5 seconde entre les soins pour plus de réactivité
+    
+    // Vérifier si assez de temps s'est écoulé depuis le dernier soin
+    if (!u.lastHealTime || (now - u.lastHealTime) >= healCooldown) {
+      const healAmount = calculateHealAmount(u);
+      console.log(`Unité ${u.id} soigne l'unité ${nearestAlly.id} pour ${healAmount} points de vie`);
+      
+      // Soigner l'unité alliée
+      healUnit(nearestAlly, healAmount);
+      
+      // Créer l'animation de soin
+      createContinuousHealLaser(u, nearestAlly, state.playerColors[u.ownerIndex]);
+      
+      // Enregistrer le temps de ce soin
+      u.lastHealTime = now;
+      
+      return { moved: false }; // Le soin ne compte pas comme un mouvement
+    } else {
+      // En attente du cooldown, maintenir la distance optimale
+      const currentDistance = Math.abs(u.x - nearestAlly.x) + Math.abs(u.y - nearestAlly.y);
+      if (currentDistance < 4) {
+        // Trop proche, s'éloigner légèrement
+        console.log(`Unité ${u.id} en cooldown de soin, s'éloigne légèrement de la cible`);
+        return moveTowardTarget(u, u.x + (u.x - nearestAlly.x), u.y + (u.y - nearestAlly.y)) ? { moved: true } : { moved: false };
+      } else if (currentDistance > 6) {
+        // Trop loin, se rapprocher
+        console.log(`Unité ${u.id} en cooldown de soin, se rapproche de la cible`);
+        return moveTowardTarget(u, nearestAlly.x, nearestAlly.y) ? { moved: true } : { moved: false };
+      } else {
+        // Distance optimale, rester sur place
+        const remainingCooldown = Math.ceil((healCooldown - (now - u.lastHealTime)) / 1000);
+        console.log(`Unité ${u.id} en cooldown de soin (${remainingCooldown}s restantes), distance optimale`);
+        return { moved: false };
+      }
+    }
+  } else {
+    // Pas à portée, se rapprocher de la cible
+    console.log(`Unité ${u.id} se rapproche de l'unité alliée à soigner (distance: ${distance})`);
+    return moveTowardTarget(u, nearestAlly.x, nearestAlly.y) ? { moved: true } : { moved: false };
+  }
 }
 
 // Traite les commandes d'attaque
@@ -1479,6 +1575,88 @@ function isUnitAttackingHQ(u) {
   return distance <= HQ_PERIM_RADIUS; // Si dans le périmètre d'attaque du QG
 }
 
+// Trouve l'unité alliée la plus proche qui a besoin de soins
+function findNearestAllyNeedingHeal(u) {
+  let nearestAlly = null;
+  let nearestDistance = Infinity;
+  
+  for (const ally of state.units) {
+    // Vérifier que c'est une unité alliée (même propriétaire)
+    if (ally.ownerIndex !== u.ownerIndex) continue;
+    
+    // Vérifier que ce n'est pas l'unité elle-même
+    if (ally.id === u.id) continue;
+    
+    // Vérifier que l'unité n'est pas complètement détruite
+    if (!hasAnyWorkingModule(ally)) continue;
+    
+    // Vérifier que l'unité a besoin de soins (au moins un module endommagé mais pas à 0 HP)
+    const needsHeal = ally.modules.some(m => m.hp < m.maxHp && m.hp > 0);
+    if (!needsHeal) continue;
+    
+    // Calculer la distance
+    const distance = Math.abs(u.x - ally.x) + Math.abs(u.y - ally.y);
+    
+    // Garder la plus proche
+    if (distance < nearestDistance) {
+      nearestDistance = distance;
+      nearestAlly = ally;
+    }
+  }
+  
+  return nearestAlly;
+}
+
+// Calcule la quantité de soins basée sur les modules de soin
+function calculateHealAmount(u) {
+  const healModules = u.modules.filter(m => m.type === 'heal' && m.hp > 0);
+  console.log(`Unité ${u.id}: ${healModules.length} modules de soin fonctionnels`);
+  return healModules.length * 12; // 12 points de vie par module de soin
+}
+
+// Soigne une unité
+function healUnit(unit, healAmount) {
+  // Soigner les modules endommagés (mais pas ceux à 0 HP)
+  const damagedModules = unit.modules.filter(m => m.hp < m.maxHp && m.hp > 0);
+  
+  if (damagedModules.length === 0) {
+    console.log(`Unité ${unit.id}: Aucun module endommagé à soigner`);
+    return;
+  }
+  
+  // Soigner les modules dans l'ordre : boucliers d'abord, puis les autres
+  const shieldModules = damagedModules.filter(m => m.type === 'shield');
+  const otherModules = damagedModules.filter(m => m.type !== 'shield');
+  
+  let remainingHeal = healAmount;
+  
+  // Soigner d'abord les boucliers
+  for (const module of shieldModules) {
+    if (remainingHeal <= 0) break;
+    
+    const healNeeded = module.maxHp - module.hp;
+    const healToApply = Math.min(remainingHeal, healNeeded);
+    module.hp += healToApply;
+    remainingHeal -= healToApply;
+    
+    console.log(`Bouclier soigné: ${module.hp}/100 HP`);
+  }
+  
+  // Soigner ensuite les autres modules
+  for (const module of otherModules) {
+    if (remainingHeal <= 0) break;
+    
+    const healNeeded = module.maxHp - module.hp;
+    const healToApply = Math.min(remainingHeal, healNeeded);
+    module.hp += healToApply;
+    remainingHeal -= healToApply;
+    
+    console.log(`Module ${module.type} soigné: ${module.hp}/100 HP`);
+  }
+  
+  console.log(`Unité ${unit.id} soignée pour ${healAmount - remainingHeal} points de vie`);
+}
+
 // Vérifie si une unité est en train d'attaquer (QG ou autre unité)
 function isUnitAttacking(u) {
   const nearestEnemy = findNearestEnemyUnit(u);
@@ -1509,28 +1687,35 @@ function processConditionalCommand(u, cmds, siIndex) {
   // Vérifier si l'unité est déjà en train d'attaquer (QG ou unité)
   const isAttackingEnemy = isUnitAttacking(u);
   
+  // Vérifier si l'unité a des modules de soin (pour permettre les soins même sans ennemi)
+  const hasHealModules = u.modules && u.modules.some(m => m.type === 'heal' && m.hp > 0);
+  
   // D'abord, exécuter les commandes avant SI (comme l'exploration) seulement si pas en train d'attaquer
   const commandesAvantSI = cmds.slice(0, siIndex);
   console.log(`Unité ${u.id}: Commandes avant SI:`, commandesAvantSI);
   console.log(`Unité ${u.id}: En train d'attaquer:`, isAttackingEnemy);
+  console.log(`Unité ${u.id}: A des modules de soin:`, hasHealModules);
   
   let hasMoved = false;
-  if (commandesAvantSI.length > 0 && !isAttackingEnemy) {
+  // Permettre l'exploration si pas en train d'attaquer OU si l'unité a des modules de soin
+  if (commandesAvantSI.length > 0 && (!isAttackingEnemy || hasHealModules)) {
     const resultPrelim = executeAction(u, commandesAvantSI);
     console.log(`Unité ${u.id}: Résultat commandes préliminaires:`, resultPrelim);
     hasMoved = resultPrelim && resultPrelim.moved;
     
     // Si l'unité a déjà bougé, ne pas exécuter d'autres actions cette frame
-    if (hasMoved) {
+    // SAUF pour les unités de soin qui peuvent soigner après avoir bougé
+    if (hasMoved && !hasHealModules) {
       console.log(`Unité ${u.id}: Déjà bougé cette frame, pas d'action supplémentaire`);
       return resultPrelim;
     }
-  } else if (isAttackingEnemy) {
+  } else if (isAttackingEnemy && !hasHealModules) {
     console.log(`Unité ${u.id}: Attaque en cours, pas d'exploration préliminaire`);
   }
   
   // Vérifier si l'unité a déjà agi cette frame (protection pour les unités en combat)
   // Mais permettre le mouvement si l'unité est en train d'attaquer et qu'elle doit bouger
+  // OU si l'unité a des modules de soin (pour permettre les soins)
   if (u.lastActionFrame === state.currentFrame) {
     // Si l'unité est en train d'attaquer et qu'elle doit bouger (poursuite/fuite), permettre le mouvement
     if (isAttackingEnemy) {
@@ -1539,6 +1724,17 @@ function processConditionalCommand(u, cmds, siIndex) {
         // Permettre le mouvement
       } else {
         return { moved: false };
+      }
+    } else if (hasHealModules) {
+      // Permettre aux unités de soin d'agir même si elles ont déjà agi cette frame
+      // (mais limiter la fréquence pour éviter le spam)
+      if (state.currentFrame % 2 === 0) {
+        // Permettre l'action de soin
+      } else {
+        // Ne pas bloquer complètement, permettre l'évaluation de la condition
+        // mais limiter l'exécution de l'action
+        console.log(`Unité ${u.id}: Unité de soin, action limitée par cooldown`);
+        // Continuer pour permettre l'évaluation de la condition
       }
     } else {
       return { moved: false };
@@ -1565,26 +1761,48 @@ function processConditionalCommand(u, cmds, siIndex) {
     // Exécuter la partie SINON
     actionToExecute = cmds.slice(sinonIndex + 1);
   } else {
-    // Pas de SINON et condition fausse : continuer les commandes préliminaires (explorer) sauf si on attaque
-    if (!hasMoved && commandesAvantSI.length > 0 && !isAttackingEnemy) {
+    // Pas de SINON et condition fausse : ne pas continuer l'exploration si on a déjà bougé
+    if (!hasMoved && commandesAvantSI.length > 0 && (!isAttackingEnemy || hasHealModules)) {
       console.log(`Unité ${u.id}: Condition fausse, continuation de l'exploration`);
       actionToExecute = commandesAvantSI;
-    } else if (isAttackingEnemy) {
+    } else if (hasMoved) {
+      console.log(`Unité ${u.id}: Condition fausse mais déjà bougé, pas d'action supplémentaire`);
+    } else if (isAttackingEnemy && !hasHealModules) {
       console.log(`Unité ${u.id}: En attaque, pas d'exploration automatique`);
     }
   }
   
   // Exécuter l'action conditionnelle
   console.log(`Unité ${u.id}: Action à exécuter:`, actionToExecute);
-  if (actionToExecute.length > 0) {
-    const result = executeAction(u, actionToExecute);
-    console.log(`Unité ${u.id}: Résultat de l'action:`, result);
-    
-    // Marquer que l'unité a agi cette frame
-    u.lastActionFrame = state.currentFrame;
-    
-    return result;
-  }
+            if (actionToExecute.length > 0) {
+            const isActionMove = actionToExecute.includes(6) || actionToExecute.includes(7); // 6=explore, 7=move_to_hq
+            const isActionHeal = actionToExecute.includes(3);
+            const isActionAttack = actionToExecute.includes(2);
+
+            if (hasMoved && isActionMove) {
+              // Si l'unité a déjà bougé cette frame et que l'action conditionnelle est aussi un mouvement,
+              // empêcher le double mouvement
+              console.log(`Unité ${u.id}: Déjà bougé cette frame, ne peut pas exécuter une action de mouvement supplémentaire.`);
+              return { moved: true }; // Retourner true car elle a déjà bougé
+            }
+
+            // Permettre les actions de soin/attaque même si l'unité a bougé
+            if (hasMoved && (isActionHeal || isActionAttack)) {
+              console.log(`Unité ${u.id}: Exécution de l'action ${isActionHeal ? 'de soin' : 'd\'attaque'} après mouvement.`);
+              const result = executeAction(u, actionToExecute);
+              u.lastActionFrame = state.currentFrame;
+              return result;
+            }
+
+            // Pour tous les autres cas (pas bougé, ou action n'est pas un mouvement, ou soigneur faisant une action non-mouvement)
+            const result = executeAction(u, actionToExecute);
+            console.log(`Unité ${u.id}: Résultat de l'action:`, result);
+
+            // Marquer que l'unité a agi cette frame
+            u.lastActionFrame = state.currentFrame;
+
+            return result;
+          }
   
   console.log(`Unité ${u.id}: Aucune action à exécuter`);
   return { moved: false };
@@ -1602,6 +1820,10 @@ function evaluateCondition(u, condition) {
     // 12 = ROBOT_ENNEMIE (unité ennemie)
     if (target === 12) {
       return detectEnemyUnit(u);
+    }
+    // 16 = ROBOT_ALLIE (unité alliée)
+    if (target === 16) {
+      return detectAllyUnit(u);
     }
     // 18 = QG (détection du QG)
     if (target === 18) {
@@ -1635,6 +1857,22 @@ function detectEnemyUnit(u) {
   );
   
   return enemyUnits.length > 0 || enemyHQs.length > 0;
+}
+
+// Détecte s'il y a une unité alliée à proximité
+function detectAllyUnit(u) {
+  const detectionRange = 7; // Portée de détection pour les unités alliées
+  
+  // Détecter les unités alliées (même propriétaire, mais pas l'unité elle-même)
+  const allyUnits = state.units.filter(unit => 
+    unit.ownerIndex === u.ownerIndex &&
+    unit.id !== u.id && // Ne pas détecter l'unité elle-même
+    Math.abs(unit.x - u.x) <= detectionRange &&
+    Math.abs(unit.y - u.y) <= detectionRange
+  );
+  
+  console.log(`Unité ${u.id}: Détection unité alliée - ${allyUnits.length} unité(s) alliée(s) détectée(s)`);
+  return allyUnits.length > 0;
 }
 
 // Détecte s'il y a un QG à proximité
@@ -1673,6 +1911,11 @@ function executeAction(u, action) {
     return processAttackCommand(u);
   }
   
+  if (action.includes(3)) {
+    // Action de soin
+    return processHealCommand(u);
+  }
+  
   if (action.includes(6)) {
     // Action d'exploration explicite
     console.log(`Unité ${u.id}: Tentative d'exploration`);
@@ -1691,6 +1934,28 @@ function executeAction(u, action) {
     
     const k = `${u.x},${u.y}`;
     pm.visitCounts.set(k, (pm.visitCounts.get(k) || 0) + 1);
+    
+    // Pour les unités de soin, essayer de se diriger vers l'allié le plus proche qui a besoin de soins
+    const hasHealModules = u.modules.some(m => m.type === 'heal' && m.hp > 0);
+    if (hasHealModules) {
+      const nearestAllyNeedingHeal = findNearestAllyNeedingHeal(u);
+      if (nearestAllyNeedingHeal) {
+        const distance = Math.abs(u.x - nearestAllyNeedingHeal.x) + Math.abs(u.y - nearestAllyNeedingHeal.y);
+        console.log(`Unité ${u.id}: Allié détecté à ${distance} cases, tentative de rapprochement`);
+        
+        // Si l'allié est trop loin, se rapprocher
+        if (distance > 6) {
+          const step = moveTowardTarget(u, nearestAllyNeedingHeal.x, nearestAllyNeedingHeal.y);
+          if (step) {
+            console.log(`Unité ${u.id}: Rapprochement vers allié (${nearestAllyNeedingHeal.x}, ${nearestAllyNeedingHeal.y})`);
+            return { moved: true };
+          }
+        } else {
+          console.log(`Unité ${u.id}: Allié à portée de soin (${distance} cases), pas de mouvement nécessaire`);
+          return { moved: false };
+        }
+      }
+    }
     
     // Utiliser la même logique que dans la boucle principale d'exploration
     const step = (function choose() {
@@ -3856,6 +4121,7 @@ function renderSpawnPanel() {
   });
   const attackPlus = el('button', { 
     textContent: '+',
+    id: 'attackPlus',
     style: 'width:20px;height:20px;border-radius:4px;border:1px solid #4b5563;background:#374151;color:#fff;font-size:12px;font-weight:600;display:flex;align-items:center;justify-content:center;cursor:pointer;' 
   });
   
@@ -3865,7 +4131,7 @@ function renderSpawnPanel() {
   // Event listeners pour Attaque
   attackPlus.addEventListener('click', () => {
     const total = getTotalModules();
-    if (total < 10 && state.selectedModules.ranged_attack === 0) {
+    if (total < 10 && state.selectedModules.ranged_attack === 0 && state.selectedModules.heal === 0) {
       state.selectedModules.attack++;
       updateModuleDisplay();
       updateEnergyCost();
@@ -3921,6 +4187,7 @@ function renderSpawnPanel() {
   });
   const rangedAttackPlus = el('button', { 
     textContent: '+',
+    id: 'rangedAttackPlus',
     style: 'width:20px;height:20px;border-radius:4px;border:1px solid #4b5563;background:#374151;color:#fff;font-size:12px;font-weight:600;display:flex;align-items:center;justify-content:center;cursor:pointer;' 
   });
   
@@ -3930,7 +4197,7 @@ function renderSpawnPanel() {
   // Event listeners pour Attaque à distance
   rangedAttackPlus.addEventListener('click', () => {
     const total = getTotalModules();
-    if (total < 10 && state.selectedModules.attack === 0) {
+    if (total < 10 && state.selectedModules.attack === 0 && state.selectedModules.heal === 0) {
       state.selectedModules.ranged_attack++;
       updateModuleDisplay();
       updateEnergyCost();
@@ -3948,9 +4215,75 @@ function renderSpawnPanel() {
   });
 
   rangedAttackBox.append(rangedAttackLine);
+
+  // BOX 6: Module Soins
+  const healBox = el('div', { className: 'unit-card' });
+  
+  const healLine = el('div', { 
+    style: 'display:flex;align-items:center;justify-content:space-between;padding:8px 16px;gap:12px;' 
+  });
+  
+  // Container pour Soins + coût (centré)
+  const healLabelContainer = el('div', { 
+    style: 'display:flex;flex-direction:column;align-items:center;flex:1;text-align:center;' 
+  });
+  const healLabel = el('span', { 
+    textContent: 'Soins', 
+    style: 'font-size:15px;color:#42d77d;margin-bottom:4px;font-weight:600;' 
+  });
+  const healCost = el('span', { 
+    textContent: '200 ⚡', 
+    style: 'color:#ffd54a;font-size:14px;font-weight:800;' 
+  });
+  healLabelContainer.append(healLabel, healCost);
+  
+  // Container pour les contrôles (à droite)
+  const healControlsContainer = el('div', { 
+    style: 'display:flex;align-items:center;gap:6px;margin-left:auto;' 
+  });
+  
+  const healCount = el('div', { 
+    id: 'healCount',
+    textContent: '0', 
+    style: 'background:#42d77d;color:#fff;border-radius:4px;padding:3px 6px;font-size:11px;min-width:20px;text-align:center;font-weight:600;' 
+  });
+  const healMinus = el('button', { 
+    textContent: '−',
+    style: 'width:20px;height:20px;border-radius:4px;border:1px solid #4b5563;background:#374151;color:#fff;font-size:12px;font-weight:600;display:flex;align-items:center;justify-content:center;cursor:pointer;' 
+  });
+  const healPlus = el('button', { 
+    textContent: '+',
+    id: 'healPlus',
+    style: 'width:20px;height:20px;border-radius:4px;border:1px solid #4b5563;background:#374151;color:#fff;font-size:12px;font-weight:600;display:flex;align-items:center;justify-content:center;cursor:pointer;' 
+  });
+  
+  healControlsContainer.append(healCount, healMinus, healPlus);
+  healLine.append(healLabelContainer, healControlsContainer);
+  
+  // Event listeners pour Soins
+  healPlus.addEventListener('click', () => {
+    const total = getTotalModules();
+    if (total < 10 && state.selectedModules.attack === 0 && state.selectedModules.ranged_attack === 0) {
+      state.selectedModules.heal++;
+      updateModuleDisplay();
+      updateEnergyCost();
+      updateAttackButtonsState();
+    }
+  });
+  
+  healMinus.addEventListener('click', () => {
+    if (state.selectedModules.heal > 0) {
+      state.selectedModules.heal--;
+      updateModuleDisplay();
+      updateEnergyCost();
+      updateAttackButtonsState();
+    }
+  });
+
+  healBox.append(healLine);
   
   const list = el('div', { className: 'unit-list' });
-  list.append(creationBox, moduleTitle, movementBox, armorBox, attackBox, rangedAttackBox);
+  list.append(creationBox, moduleTitle, movementBox, armorBox, attackBox, rangedAttackBox, healBox);
   panel.append(hpDisplayLine, energyDisplayLine, separator, mainTitle, list);
   // init texte PV et coût énergie
   updateHqHpLine();
@@ -4047,6 +4380,26 @@ function createContinuousLaser(attacker, target, playerColor) {
   });
 }
 
+// Crée ou met à jour un laser de soin continu entre deux unités
+function createContinuousHealLaser(healer, target, playerColor) {
+  const now = performance.now();
+  
+  // Supprimer tout laser de soin existant de cette unité
+  state.activeLasers = state.activeLasers.filter(laser => laser.unitId !== healer.id);
+  
+  // Ajouter le nouveau laser de soin (toujours vert, peu importe la couleur du joueur)
+  state.activeLasers.push({
+    unitId: healer.id,
+    targetId: target.id,
+    targetType: 'unit',
+    targetX: target.x,
+    targetY: target.y,
+    startTime: now,
+    playerColor: 'green', // Laser de soin toujours vert
+    isHeal: true // Marquer comme laser de soin
+  });
+}
+
 // Nettoie les lasers qui ne sont plus actifs
 function cleanupActiveLasers() {
   state.activeLasers = state.activeLasers.filter(laser => {
@@ -4068,9 +4421,16 @@ function cleanupActiveLasers() {
     const distance = Math.abs(attacker.x - laser.targetX) + Math.abs(attacker.y - laser.targetY);
     if (distance > 6) return false; // Plus à portée
     
-    // Vérifier si l'unité a encore des modules d'attaque à distance
-    const hasRangedAttack = attacker.modules && attacker.modules.some(m => m.type === 'ranged_attack' && m.hp > 0);
-    if (!hasRangedAttack) return false; // Plus de modules d'attaque
+    // Vérifier si l'unité a encore des modules appropriés
+    if (laser.isHeal) {
+      // Pour les lasers de soin, vérifier les modules de soin
+      const hasHeal = attacker.modules && attacker.modules.some(m => m.type === 'heal' && m.hp > 0);
+      if (!hasHeal) return false; // Plus de modules de soin
+    } else {
+      // Pour les lasers d'attaque, vérifier les modules d'attaque à distance
+      const hasRangedAttack = attacker.modules && attacker.modules.some(m => m.type === 'ranged_attack' && m.hp > 0);
+      if (!hasRangedAttack) return false; // Plus de modules d'attaque
+    }
     
     return true; // Laser toujours actif
   });
@@ -4142,41 +4502,92 @@ function drawActiveLasers(ctx, tile, ox, oy) {
     
     ctx.save();
     
-    // Dessiner le laser principal
-    ctx.strokeStyle = playerColor;
-    ctx.globalAlpha = pulseIntensity;
-    ctx.lineWidth = 3;
-    ctx.lineCap = 'round';
-    
-    ctx.beginPath();
-    ctx.moveTo(screenFromX, screenFromY);
-    ctx.lineTo(screenToX, screenToY);
-    ctx.stroke();
-    
-    // Halo lumineux externe
-    ctx.strokeStyle = playerColor;
-    ctx.globalAlpha = pulseIntensity * 0.3;
-    ctx.lineWidth = 8;
-    ctx.shadowColor = playerColor;
-    ctx.shadowBlur = 12;
-    
-    ctx.beginPath();
-    ctx.moveTo(screenFromX, screenFromY);
-    ctx.lineTo(screenToX, screenToY);
-    ctx.stroke();
-    
-    // Effet de lueur intermédiaire
-    ctx.globalAlpha = pulseIntensity * 0.6;
-    ctx.lineWidth = 5;
-    ctx.shadowBlur = 6;
-    
-    ctx.beginPath();
-    ctx.moveTo(screenFromX, screenFromY);
-    ctx.lineTo(screenToX, screenToY);
-    ctx.stroke();
-    
-    // Créer des étincelles à l'impact du laser sur la cible
-    createLaserSparks(screenToX, screenToY, laser.playerColor);
+    if (laser.isHeal) {
+      // Laser de soin : effet en cône avec plusieurs rayons
+      const coneAngle = Math.PI / 6; // 30 degrés d'ouverture
+      const rayCount = 5; // Nombre de rayons dans le cône
+      
+      // Calculer la largeur du cône à la cible (ne doit pas dépasser la largeur d'une unité)
+      const unitWidth = tile * 0.8; // Largeur approximative d'une unité
+      const maxConeWidth = unitWidth * 0.8; // 80% de la largeur d'une unité
+      
+      for (let i = 0; i < rayCount; i++) {
+        // Calculer l'angle de déviation pour ce rayon
+        const deviation = (i - (rayCount - 1) / 2) * (coneAngle / (rayCount - 1));
+        const rayAngle = laserAngle + deviation;
+        
+        // Calculer la position de fin du rayon avec largeur de cône limitée
+        const rayLength = Math.sqrt((screenToX - screenFromX) ** 2 + (screenToY - screenFromY) ** 2);
+        const maxDeviation = Math.atan2(maxConeWidth / 2, rayLength); // Limiter la déviation
+        const limitedDeviation = Math.sign(deviation) * Math.min(Math.abs(deviation), maxDeviation);
+        const finalRayAngle = laserAngle + limitedDeviation;
+        
+        const rayEndX = screenFromX + Math.cos(finalRayAngle) * rayLength;
+        const rayEndY = screenFromY + Math.sin(finalRayAngle) * rayLength;
+        
+        // Dessiner le rayon de soin (vert)
+        ctx.strokeStyle = '#42d77d'; // Vert pour les soins
+        ctx.globalAlpha = pulseIntensity * (1 - Math.abs(limitedDeviation) / maxDeviation * 0.5); // Plus intense au centre
+        ctx.lineWidth = 2;
+        ctx.lineCap = 'round';
+        
+        ctx.beginPath();
+        ctx.moveTo(screenFromX, screenFromY);
+        ctx.lineTo(rayEndX, rayEndY);
+        ctx.stroke();
+        
+        // Halo lumineux pour le rayon de soin
+        ctx.globalAlpha = pulseIntensity * 0.3 * (1 - Math.abs(limitedDeviation) / maxDeviation * 0.5);
+        ctx.lineWidth = 6;
+        ctx.shadowColor = '#42d77d';
+        ctx.shadowBlur = 8;
+        
+        ctx.beginPath();
+        ctx.moveTo(screenFromX, screenFromY);
+        ctx.lineTo(rayEndX, rayEndY);
+        ctx.stroke();
+      }
+      
+      // Créer des étincelles vertes à l'impact
+      createLaserSparks(screenToX, screenToY, 'green');
+    } else {
+      // Laser d'attaque normal
+      // Dessiner le laser principal
+      ctx.strokeStyle = playerColor;
+      ctx.globalAlpha = pulseIntensity;
+      ctx.lineWidth = 3;
+      ctx.lineCap = 'round';
+      
+      ctx.beginPath();
+      ctx.moveTo(screenFromX, screenFromY);
+      ctx.lineTo(screenToX, screenToY);
+      ctx.stroke();
+      
+      // Halo lumineux externe
+      ctx.strokeStyle = playerColor;
+      ctx.globalAlpha = pulseIntensity * 0.3;
+      ctx.lineWidth = 8;
+      ctx.shadowColor = playerColor;
+      ctx.shadowBlur = 12;
+      
+      ctx.beginPath();
+      ctx.moveTo(screenFromX, screenFromY);
+      ctx.lineTo(screenToX, screenToY);
+      ctx.stroke();
+      
+      // Effet de lueur intermédiaire
+      ctx.globalAlpha = pulseIntensity * 0.6;
+      ctx.lineWidth = 5;
+      ctx.shadowBlur = 6;
+      
+      ctx.beginPath();
+      ctx.moveTo(screenFromX, screenFromY);
+      ctx.lineTo(screenToX, screenToY);
+      ctx.stroke();
+      
+      // Créer des étincelles à l'impact du laser sur la cible
+      createLaserSparks(screenToX, screenToY, laser.playerColor);
+    }
     
     ctx.restore();
   }
@@ -4499,34 +4910,78 @@ function updateModuleDisplay() {
   if (rangedAttackCount) {
     rangedAttackCount.textContent = state.selectedModules.ranged_attack.toString();
   }
+  const healCount = q('#healCount');
+  if (healCount) {
+    healCount.textContent = state.selectedModules.heal.toString();
+  }
+  
+  // Mettre à jour l'état des boutons d'attaque et de soin
+  updateAttackButtonsState();
 }
 
-// Met à jour l'état des boutons d'attaque (exclusion mutuelle)
+// Met à jour l'état des boutons d'attaque et de soin (exclusion mutuelle)
 function updateAttackButtonsState() {
   const attackPlus = q('#attackPlus');
   const rangedAttackPlus = q('#rangedAttackPlus');
+  const healPlus = q('#healPlus');
   
-  if (attackPlus && rangedAttackPlus) {
-    // Si on a des modules d'attaque à distance, griser les boutons d'attaque CAC
-    if (state.selectedModules.ranged_attack > 0) {
+  if (attackPlus && rangedAttackPlus && healPlus) {
+    // Vérifier si on a des modules de soin
+    const hasHealModules = state.selectedModules.heal > 0;
+    // Vérifier si on a des modules d'attaque (CAC ou à distance)
+    const hasAttackModules = state.selectedModules.attack > 0 || state.selectedModules.ranged_attack > 0;
+    
+    // Si on a des modules de soin, griser les boutons d'attaque
+    if (hasHealModules) {
       attackPlus.disabled = true;
       attackPlus.style.opacity = '0.5';
       attackPlus.style.cursor = 'not-allowed';
-    } else {
-      attackPlus.disabled = false;
-      attackPlus.style.opacity = '1';
-      attackPlus.style.cursor = 'pointer';
-    }
-    
-    // Si on a des modules d'attaque CAC, griser les boutons d'attaque à distance
-    if (state.selectedModules.attack > 0) {
       rangedAttackPlus.disabled = true;
       rangedAttackPlus.style.opacity = '0.5';
       rangedAttackPlus.style.cursor = 'not-allowed';
     } else {
+      attackPlus.disabled = false;
+      attackPlus.style.opacity = '1';
+      attackPlus.style.cursor = 'pointer';
       rangedAttackPlus.disabled = false;
       rangedAttackPlus.style.opacity = '1';
       rangedAttackPlus.style.cursor = 'pointer';
+    }
+    
+    // Si on a des modules d'attaque, griser les boutons de soin
+    if (hasAttackModules) {
+      healPlus.disabled = true;
+      healPlus.style.opacity = '0.5';
+      healPlus.style.cursor = 'not-allowed';
+    } else {
+      healPlus.disabled = false;
+      healPlus.style.opacity = '1';
+      healPlus.style.cursor = 'pointer';
+    }
+    
+    // Exclusion mutuelle entre attaque CAC et attaque à distance (si pas de soin)
+    if (!hasHealModules) {
+      // Si on a des modules d'attaque à distance, griser les boutons d'attaque CAC
+      if (state.selectedModules.ranged_attack > 0) {
+        attackPlus.disabled = true;
+        attackPlus.style.opacity = '0.5';
+        attackPlus.style.cursor = 'not-allowed';
+      } else {
+        attackPlus.disabled = false;
+        attackPlus.style.opacity = '1';
+        attackPlus.style.cursor = 'pointer';
+      }
+      
+      // Si on a des modules d'attaque CAC, griser les boutons d'attaque à distance
+      if (state.selectedModules.attack > 0) {
+        rangedAttackPlus.disabled = true;
+        rangedAttackPlus.style.opacity = '0.5';
+        rangedAttackPlus.style.cursor = 'not-allowed';
+      } else {
+        rangedAttackPlus.disabled = false;
+        rangedAttackPlus.style.opacity = '1';
+        rangedAttackPlus.style.cursor = 'pointer';
+      }
     }
   }
 }
@@ -4570,7 +5025,7 @@ function updateCreateButtonState() {
 }
 
 function calculateUnitCost() {
-  return state.selectedModules.movement * 50 + state.selectedModules.shield * 150 + state.selectedModules.attack * 80 + state.selectedModules.ranged_attack * 130; // 50 énergie par module de mouvement, 150 par module de bouclier, 80 par module d'attaque, 130 par module d'attaque à distance
+  return state.selectedModules.movement * 50 + state.selectedModules.shield * 150 + state.selectedModules.attack * 80 + state.selectedModules.ranged_attack * 130 + state.selectedModules.heal * 200; // 50 énergie par module de mouvement, 150 par module de bouclier, 80 par module d'attaque, 130 par module d'attaque à distance, 200 par module de soin
 }
 
 function updateHqHpLine() {
@@ -4773,6 +5228,7 @@ function spawnUnit() {
   state.selectedModules.shield = 0;
   state.selectedModules.attack = 0;
   state.selectedModules.ranged_attack = 0;
+  state.selectedModules.heal = 0;
   updateModuleDisplay();
   updateEnergyCost();
   updateAttackButtonsState();
@@ -4824,6 +5280,9 @@ function spawnUnitFromHQ(hq, ownerIndex, offsetIdx = 0) {
         }
         for (let i = 0; i < state.selectedModules.ranged_attack; i++) {
           modules.push({ type: 'ranged_attack', hp: 100, maxHp: 100 });
+        }
+        for (let i = 0; i < state.selectedModules.heal; i++) {
+          modules.push({ type: 'heal', hp: 100, maxHp: 100 });
         }
       } else { // Unités initiales (spawn automatique au début)
         // Une unité initiale basique sans module
@@ -5013,6 +5472,9 @@ function drawModuleRing(ctx, u, cx, cy, r, ringW) {
               break;
             case 'ranged_attack':
               moduleColor = '#654321'; // Marron foncé pour attaque à distance
+              break;
+            case 'heal':
+              moduleColor = '#42d77d'; // Vert pour soins
               break;
             default:
               moduleColor = '#6b7280';
