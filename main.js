@@ -36,7 +36,7 @@ const state = {
   nextUnitId: 1,
   nextLocalIdByPlayer: [],
   lastSimTime: 0,
-  unitSpeedTilesPerSec: 4.5,
+  unitSpeedTilesPerSec: 2.5,
   currentFrame: 0,
 };
 
@@ -838,8 +838,8 @@ function stepSimulation(dt = 0) {
     }
     
     // Sécurité : empêcher les déplacements multiples par frame
-    if (u.lastMoveTime && (performance.now() - u.lastMoveTime) < 500) {
-      continue; // Attendre au moins 500ms entre les déplacements
+    if (u.lastMoveTime && (performance.now() - u.lastMoveTime) < 300) {
+      continue; // Attendre au moins 300ms entre les déplacements
     }
     
     // Empêcher les unités d'exécuter plusieurs actions dans la même frame
@@ -1440,14 +1440,31 @@ function processAttackCommand(u) {
         return executeExploreAction(u);
       }
   } else {
-    // En attente du cooldown, continuer à se déplacer vers la cible si c'est une attaque CAC
-    if (attackType === 'melee' && nearestEnemy) {
-      console.log(`Unité ${u.id} en cooldown d'attaque CAC, poursuite de la cible`);
-      return moveTowardTarget(u, nearestEnemy.x, nearestEnemy.y) ? { moved: true } : { moved: false };
+    // En attente du cooldown, permettre le mouvement pour maintenir la distance optimale
+    if (nearestEnemy) {
+      if (attackType === 'melee') {
+        // Unités CAC : poursuivre la cible
+        console.log(`Unité ${u.id} en cooldown d'attaque CAC, poursuite de la cible`);
+        return moveTowardTarget(u, nearestEnemy.x, nearestEnemy.y) ? { moved: true } : { moved: false };
+      } else {
+        // Unités à distance : maintenir la distance optimale (6 cases)
+        const currentDistance = Math.abs(u.x - nearestEnemy.x) + Math.abs(u.y - nearestEnemy.y);
+        if (currentDistance < 5) {
+          // Trop proche, s'éloigner
+          console.log(`Unité ${u.id} en cooldown d'attaque à distance, s'éloigne de la cible`);
+          return moveTowardTarget(u, u.x + (u.x - nearestEnemy.x), u.y + (u.y - nearestEnemy.y)) ? { moved: true } : { moved: false };
+        } else if (currentDistance > 7) {
+          // Trop loin, se rapprocher
+          console.log(`Unité ${u.id} en cooldown d'attaque à distance, se rapproche de la cible`);
+          return moveTowardTarget(u, nearestEnemy.x, nearestEnemy.y) ? { moved: true } : { moved: false };
+        } else {
+          // Distance optimale, rester sur place
+          const remainingCooldown = Math.ceil((attackCooldown - (now - u.lastAttackTime)) / 1000);
+          console.log(`Unité ${u.id} en cooldown d'attaque à distance (${remainingCooldown}s restantes), distance optimale`);
+          return { moved: false };
+        }
+      }
     } else {
-      // Pour les attaques à distance, rester sur place pendant le cooldown
-      const remainingCooldown = Math.ceil((attackCooldown - (now - u.lastAttackTime)) / 1000);
-      console.log(`Unité ${u.id} en cooldown d'attaque à distance (${remainingCooldown}s restantes)`);
       return { moved: false };
     }
   }
@@ -1502,8 +1519,30 @@ function processConditionalCommand(u, cmds, siIndex) {
     const resultPrelim = executeAction(u, commandesAvantSI);
     console.log(`Unité ${u.id}: Résultat commandes préliminaires:`, resultPrelim);
     hasMoved = resultPrelim && resultPrelim.moved;
+    
+    // Si l'unité a déjà bougé, ne pas exécuter d'autres actions cette frame
+    if (hasMoved) {
+      console.log(`Unité ${u.id}: Déjà bougé cette frame, pas d'action supplémentaire`);
+      return resultPrelim;
+    }
   } else if (isAttackingEnemy) {
     console.log(`Unité ${u.id}: Attaque en cours, pas d'exploration préliminaire`);
+  }
+  
+  // Vérifier si l'unité a déjà agi cette frame (protection pour les unités en combat)
+  // Mais permettre le mouvement si l'unité est en train d'attaquer et qu'elle doit bouger
+  if (u.lastActionFrame === state.currentFrame) {
+    // Si l'unité est en train d'attaquer et qu'elle doit bouger (poursuite/fuite), permettre le mouvement
+    if (isAttackingEnemy) {
+      // Limiter la fréquence des actions en combat (toutes les 4 frames au lieu de chaque frame)
+      if (state.currentFrame % 4 === 0) {
+        // Permettre le mouvement
+      } else {
+        return { moved: false };
+      }
+    } else {
+      return { moved: false };
+    }
   }
   
   // Extraire la condition (entre SI et ALORS)
@@ -1540,6 +1579,10 @@ function processConditionalCommand(u, cmds, siIndex) {
   if (actionToExecute.length > 0) {
     const result = executeAction(u, actionToExecute);
     console.log(`Unité ${u.id}: Résultat de l'action:`, result);
+    
+    // Marquer que l'unité a agi cette frame
+    u.lastActionFrame = state.currentFrame;
+    
     return result;
   }
   
@@ -4416,14 +4459,21 @@ function getSpeedModifier(unit) {
   const movementModules = workingModules.filter(module => module.type === 'movement').length;
   const otherModules = workingModules.filter(module => module.type !== 'movement').length;
   
+  // Debug: afficher les modules de l'unité (commenté pour réduire les logs)
+  // console.log(`🔍 Unité ${unit.id}: ${movementModules} modules mouvement, ${otherModules} autres modules`);
+  
   // Si pas de modules de mouvement fonctionnels, pas de mouvement
   if (movementModules === 0) return 0;
   
   // Si pas d'autres modules, vitesse normale
-  if (otherModules === 0) return 1.0;
+  if (otherModules === 0) {
+    return 1.0;
+  }
   
   // Si autant ou plus de modules de mouvement que d'autres modules, vitesse normale
-  if (movementModules >= otherModules) return 1.0;
+  if (movementModules >= otherModules) {
+    return 1.0;
+  }
   
   // Si moins de modules de mouvement que d'autres modules, ralentissement proportionnel
   const ratio = movementModules / otherModules;
@@ -5051,7 +5101,18 @@ function drawUnitIconWithId(ctx, size, color, idText) {
   ctx.fillText(String(idText), c, c + 1);
 }
 
-function easeOutCubic(t) { t = Math.min(1, Math.max(0, t)); return 1 - Math.pow(1 - t, 3); }
+function easeOutCubic(t) { 
+  t = Math.min(1, Math.max(0, t)); 
+  // Utiliser une interpolation linéaire pour un mouvement plus fluide et constant
+  return t; // Mouvement linéaire au lieu d'une courbe
+}
+
+// Fonction pour calculer la durée d'animation de mouvement
+function getMovementDuration(unit) {
+  const speedModifier = getSpeedModifier(unit);
+  const baseDuration = Math.max(60, Math.floor(1000 / state.unitSpeedTilesPerSec));
+  return speedModifier > 0 ? Math.floor(baseDuration / speedModifier) : baseDuration * 10;
+}
 
 // Chaque symbole utilise hp (0..1) pour un remplissage vertical
 function drawTriangleSymbol(ctx, cx, cy, r, hp) {
