@@ -36,7 +36,7 @@ const state = {
   nextUnitId: 1,
   nextLocalIdByPlayer: [],
   lastSimTime: 0,
-  unitSpeedTilesPerSec: 2.5,
+  unitSpeedTilesPerSec: 4.0,
   currentFrame: 0,
 };
 
