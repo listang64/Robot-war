@@ -103,7 +103,7 @@ function renderMenu() {
 
 function setPlayers(n) {
   state.players = n;
-  // rafraîchit seulement le groupe pour l’active
+  // rafraîchit seulement le groupe pour l'active
   const group = q('.select-group');
   if (!group) return;
   group.querySelectorAll('button').forEach(b => b.classList.toggle('active', Number(b.dataset.value) === n));
@@ -181,6 +181,9 @@ function renderGame() {
 
   // Start overlay
   const startOv = el('div', { className: 'start-overlay', id: 'startOverlay' });
+  // Empêche les clics de traverser l'overlay de démarrage
+  startOv.addEventListener('click', (e) => e.stopPropagation());
+  startOv.addEventListener('mousedown', (e) => e.stopPropagation());
   const stack = el('div', { className: 'start-stack' });
   const startBtn = el('button', { className: 'start-button', textContent: 'Commencer la partie' });
   startBtn.addEventListener('click', () => { if (state.isPaused) togglePause(); const so = q('#startOverlay'); if (so) so.classList.remove('visible'); });
@@ -207,6 +210,9 @@ function renderGame() {
 
   // Program overlay (droite + display centre)
   const progOverlay = el('div', { className: 'program-overlay', id: 'programOverlay' });
+  // Empêche les clics de traverser l'overlay de programmation
+  progOverlay.addEventListener('click', (e) => e.stopPropagation());
+  progOverlay.addEventListener('mousedown', (e) => e.stopPropagation());
   const side = el('div', { className: 'side' });
   const keypad = el('div', { className: 'prog-keypad' });
   const keys = ['0','1','2','3','4','5','6','7','8','9'];
@@ -228,6 +234,9 @@ function renderGame() {
   devBtn.addEventListener('click', toggleDevOverlay);
   hud.append(devBtn);
   const devOverlay = el('div', { className: 'dev-overlay', id: 'devOverlay' });
+  // Empêche les clics de traverser l'overlay développeur
+  devOverlay.addEventListener('click', (e) => e.stopPropagation());
+  devOverlay.addEventListener('mousedown', (e) => e.stopPropagation());
   const devSide = el('div', { className: 'side-left' });
   const devList = el('div', { className: 'dev-list' });
   const colors = [ 'blue', 'red', 'purple', 'green' ];
@@ -578,9 +587,13 @@ function onProgBackspace() {
   programBuffer = programBuffer.slice(0, -1);
   updateProgDisplay();
 }
-function onProgFlag() { /* réservé */ }
+function onProgFlag() {
+  // Ajoute un # dans le buffer
+  programBuffer = (programBuffer || '') + '#';
+  updateProgDisplay();
+}
 function onProgSpace() {
-  // Insère un séparateur visuel égal à la largeur d’un chiffre (espace insécable fine + espace)
+  // Insère un séparateur visuel égal à la largeur d'un chiffre (espace insécable fine + espace)
   if (programBuffer.length === 0 || programBuffer.endsWith(' ')) { updateProgDisplay(); return; }
   programBuffer += ' ';
   updateProgDisplay();
@@ -595,6 +608,7 @@ function onProgValidate() {
   const myUnit = state.units.find(u => String(u.id) === unitId && u.ownerIndex === state.currentPlayerIndex);
   if (!myUnit) { programBuffer = ''; updateProgDisplay(); return; }
   const cmdTokens = tokens.slice(1);
+  
   // Commande spéciale 00: détruit l'unité ciblée
   if (cmdTokens.includes('00')) {
     // Supprimer l'unité de la liste
@@ -620,11 +634,105 @@ function onProgValidate() {
     updateProgDisplay();
     return;
   }
-  const commands = cmdTokens
-    .filter(t => t !== '00')
-    .map(t => parseInt(t, 10))
-    .filter(n => Number.isFinite(n));
+  
+  // Traitement des commandes avec # (marqueur de cible modulable)
+  const commands = [];
+  for (let i = 0; i < cmdTokens.length; i++) {
+    const token = cmdTokens[i];
+    if (token === '00') continue; // Ignorer la commande 00
+    
+    // Cas 0: Normaliser "7 4 #ID" ou "7 4 ID" -> "7 #ID" (cible unité)
+    if (token === '7') {
+      if (i + 1 < cmdTokens.length) {
+        const t1 = cmdTokens[i + 1];
+        if (t1 === '4' && i + 2 < cmdTokens.length) {
+          const t2 = cmdTokens[i + 2];
+          let targetId = null;
+          if (typeof t2 === 'string' && t2.startsWith('#')) {
+            targetId = parseInt(t2.substring(1), 10);
+          } else {
+            targetId = parseInt(t2, 10);
+          }
+          if (Number.isFinite(targetId)) {
+            commands.push(7, 21, targetId);
+            i += 2; // consomme '4' et l'ID
+            continue;
+          }
+        } else if (typeof t1 === 'string' && t1.startsWith('#')) {
+          const targetId = parseInt(t1.substring(1), 10);
+          if (Number.isFinite(targetId)) {
+            commands.push(7, 21, targetId);
+            i += 1; // consomme '#ID'
+            continue;
+          }
+        } else {
+          const targetId = parseInt(t1, 10);
+          if (Number.isFinite(targetId)) {
+            commands.push(7, 21, targetId);
+            i += 1; // consomme ID
+            continue;
+          }
+        }
+      }
+      // Pas de cible valide après 7
+      commands.push(7);
+      continue;
+    }
+
+    // Cas 1: Commande 4 (SUIVRE) suivie d'un ID cible (ex: "4 2" ou "4 #2")
+    if (token === '4') {
+      if (i + 1 < cmdTokens.length) {
+        const nextToken = cmdTokens[i + 1];
+        let targetId;
+        if (nextToken.startsWith('#')) {
+          targetId = parseInt(nextToken.substring(1), 10);
+        } else {
+          targetId = parseInt(nextToken, 10);
+        }
+        
+        if (Number.isFinite(targetId)) {
+          commands.push(4, targetId);
+          i++; // Sauter le token suivant car c'est l'argument de 4
+          continue;
+        }
+      }
+      // Si '4' n'est pas suivi d'une cible valide, c'est une commande incomplète
+      commands.push(4);
+      continue;
+    }
+    
+    // Cas 2: Token '#' (du bouton) suivi d'un ID cible (ex: "# 2") => Marqueur de cible (21, id)
+    if (token === '#') {
+      if (i + 1 < cmdTokens.length) {
+        const targetId = parseInt(cmdTokens[i + 1], 10);
+        if (Number.isFinite(targetId)) {
+          commands.push(21, targetId); // 21 = TARGET_ID (marqueur de cible générique)
+          i++; // Sauter le token suivant car c'est l'ID cible
+          continue;
+        }
+      }
+      // Si '#' n'est pas suivi d'une cible valide, ignorer
+      continue;
+    }
+    
+    // Cas 3: Token '#ID' (ex: "#2") comme commande autonome => Marqueur de cible (21, id)
+    if (token.startsWith('#')) {
+      const targetId = parseInt(token.substring(1), 10);
+      if (Number.isFinite(targetId)) {
+        commands.push(21, targetId); // 21 = TARGET_ID (marqueur de cible générique)
+        continue;
+      }
+    }
+    
+    // Cas 4: Token normal (nombre) (ex: "6", "11", "5")
+    const num = parseInt(token, 10);
+    if (Number.isFinite(num)) {
+      commands.push(num);
+    }
+  }
+  
   state.programs[unitId] = commands;
+  console.log(`✅ Programme enregistré pour unité ${unitId}:`, commands);
   programBuffer = '';
   updateProgDisplay();
 }
@@ -636,6 +744,7 @@ function updateProgDisplay() {
   for (let i = 0; i < programBuffer.length; i++) {
     const ch = programBuffer[i];
     if (ch === ' ') html += '<span class="prog-space"></span>';
+    else if (ch === '#') html += '<span style="color: #ff6b6b; font-weight: bold;">#</span>';
     else html += escapeHtml(ch);
   }
   d.innerHTML = html;
@@ -647,9 +756,9 @@ function makeIconButton(iconText, title, handler) {
   const b = el('button', { title }); b.textContent = iconText; b.addEventListener('click', handler); return b;
 }
 function makeFlagButton() {
-  const b = el('button', { title: 'Drapeau (marqueur)' });
-  // petit drapeau stylisé via unicode
-  b.textContent = '🚩';
+  const b = el('button', { title: 'Suivre (pion)' });
+  // petit pion stylisé via unicode
+  b.textContent = '♟️';
   b.addEventListener('click', onProgFlag);
   return b;
 }
@@ -667,6 +776,12 @@ function selectDevSpawn(type, colorKey) {
 }
 // Cliquer sur la carte pour placer si sélection active
 document.addEventListener('click', (e) => {
+  // Bloquer seulement si d'autres overlays modaux sont ouverts
+  const blockedByOverlay = (
+    (q('#programOverlay') && q('#programOverlay').classList.contains('visible')) ||
+    (q('#startOverlay') && q('#startOverlay').classList.contains('visible'))
+  );
+  if (blockedByOverlay) return;
   if (!devSpawnSelection) return;
   const canvas = q('#game'); if (!canvas) return;
   const rect = canvas.getBoundingClientRect();
@@ -732,24 +847,28 @@ document.addEventListener('click', (e) => {
   const newUnit = state.units[state.units.length - 1];
   checkForEnemyHQDiscovery(newUnit);
   
-  // Programmer automatiquement l'unité
-  if (devSpawnSelection.type === 'unit_2movement') {
-    // Unité rouge spéciale: seulement exploration
-    state.programs[String(idNum)] = [6];
-    console.log(`Unité rouge ${idNum} créée avec programmation d'exploration simple`);
-  } else if (devSpawnSelection.type === 'unit_cac') {
-    // Unité rouge CAC: programmation avancée
-    state.programs[String(idNum)] = [6, 11, 5, 12, 15, 2, 14, 6];
-    console.log(`Unité rouge ${devSpawnSelection.type} ${idNum} créée avec programmation avancée`);
-          } else if (devSpawnSelection.type === 'unit_soin_rouge') {
-          // Unité rouge soin: programmation de soin optimisée
-          // 6=explorer, 11=SI, 5=detect, 16=allié, 15=ALORS, 3=soigner, 6=explorer, 14=SINON, 6=explorer
-          state.programs[String(idNum)] = [6, 11, 5, 16, 15, 3, 6, 14, 6];
-          console.log(`Unité rouge soin ${idNum} créée avec programmation de soin optimisée`);
-        } else {
-    // Unités normales: séquence complète
-    state.programs[String(idNum)] = [6, 11, 5, 12, 15, 2];
-    console.log(`Unité développeur ${idNum} créée avec modules prédéfinis et programmée automatiquement`);
+  // Programmer automatiquement l'unité seulement si elle n'a pas déjà été programmée
+  if (!state.programs[String(idNum)]) {
+    if (devSpawnSelection.type === 'unit_2movement') {
+      // Unité rouge spéciale: seulement exploration
+      state.programs[String(idNum)] = [6];
+      console.log(`Unité rouge ${idNum} créée avec programmation d'exploration simple`);
+    } else if (devSpawnSelection.type === 'unit_cac') {
+      // Unité rouge CAC: programmation avancée
+      state.programs[String(idNum)] = [6, 11, 5, 12, 15, 2, 14, 6];
+      console.log(`Unité rouge ${devSpawnSelection.type} ${idNum} créée avec programmation avancée`);
+    } else if (devSpawnSelection.type === 'unit_soin_rouge') {
+      // Unité rouge soin: programmation de soin optimisée
+      // 6=explorer, 11=SI, 5=detect, 16=allié, 15=ALORS, 3=soigner, 6=explorer, 14=SINON, 6=explorer
+      state.programs[String(idNum)] = [6, 11, 5, 16, 15, 3, 6, 14, 6];
+      console.log(`Unité rouge soin ${idNum} créée avec programmation de soin optimisée`);
+    } else {
+      // Unités normales: séquence complète
+      state.programs[String(idNum)] = [6, 11, 5, 12, 15, 2];
+      console.log(`Unité développeur ${idNum} créée avec modules prédéfinis et programmée automatiquement`);
+    }
+  } else {
+    console.log(`Unité ${idNum} a déjà été programmée manuellement, pas de programmation automatique`);
   }
   
   const canvas2 = q('#game'); if (canvas2) drawScene(canvas2);
@@ -759,6 +878,12 @@ document.addEventListener('click', (e) => {
 
 // Cliquer une unité de sa couleur pour ouvrir la programmation avec ID prérempli
 document.addEventListener('click', (e) => {
+  // Ne pas ouvrir programmation si overlays modaux (start/program) sont ouverts
+  const blockedByOverlay = (
+    (q('#programOverlay') && q('#programOverlay').classList.contains('visible')) ||
+    (q('#startOverlay') && q('#startOverlay').classList.contains('visible'))
+  );
+  if (blockedByOverlay) return;
   const canvas = q('#game'); if (!canvas) return;
   const rect = canvas.getBoundingClientRect();
   const x = e.clientX - rect.left, y = e.clientY - rect.top;
@@ -810,13 +935,13 @@ function stepSimulation(dt = 0) {
     checkForEnemyHQDiscovery(u);
   }
   
-  // Commenté pour réduire les logs
-  // for (const u of state.units) {
-  //   const cmds = state.programs[String(u.id)] || [];
-  //   if (cmds.length > 0) {
-  //     console.log(`DEBUG stepSimulation: Unité ${u.id} a les commandes:`, cmds);
-  //   }
-  // }
+  // Debug: afficher les commandes de chaque unité
+  for (const u of state.units) {
+    const cmds = state.programs[String(u.id)] || [];
+    if (cmds.length > 0) {
+      console.log(`🔍 stepSimulation: Unité ${u.id} a les commandes:`, cmds);
+    }
+  }
   
   // Supprimer les unités qui n'ont plus aucun module fonctionnel
   const unitsToRemove = [];
@@ -849,16 +974,13 @@ function stepSimulation(dt = 0) {
   
   let moved = false;
   for (const u of state.units) {
-    // ignore les unités déjà en animation
+    // Ne pas ignorer les unités en animation: permettre aux commandes prioritaires
     if (u.anim && performance.now() < u.anim.endTime) {
       const animDuration = u.anim.endTime - u.anim.startTime;
-      
       // Sécurité : si l'animation dure plus de 10 secondes, la forcer à se terminer
       if (animDuration > 10000) {
         console.log(`⚠️ CORRECTION: Animation trop longue pour unité ${u.id}, forcer l'arrêt`);
         u.anim = null;
-      } else {
-        continue;
       }
     }
     
@@ -879,12 +1001,17 @@ function stepSimulation(dt = 0) {
       continue;
     }
     
-    // Traitement des nouvelles commandes conditionnelles et d'attaque
+    // Traitement des nouvelles commandes (prioritaires même si une anim est en cours)
     const processed = processAdvancedCommands(u, cmds);
     if (processed) {
       if (processed.moved) moved = true;
       // Marquer que l'unité a agi cette frame pour éviter le traitement multiple
       u.lastActionFrame = state.currentFrame;
+      continue;
+    }
+
+    // Si toujours en animation en cours et aucune commande prioritaire, ignorer jusqu'à la fin de l'anim
+    if (u.anim && performance.now() < u.anim.endTime) {
       continue;
     }
     
@@ -1012,7 +1139,8 @@ function stepSimulation(dt = 0) {
           // Forcer demi-tour complet si cul-de-sac
           if (u.lastDir) {
             const d = [-u.lastDir[0], -u.lastDir[1]];
-            const nx = u.x + d[0], ny = u.y + d[1];
+            const nx = u.x + d[0];
+            const ny = u.y + d[1];
             if (isInBounds(nx, ny) && !isBlocked(nx, ny) && !unitAt(nx, ny)) return d;
           }
           scored = collect(true);
@@ -1148,7 +1276,7 @@ function moveTowardOrExploreInline(u, tx, ty) {
   return true;
 }
 
-// Traite les commandes avancées (détection, conditionnelles, attaque)
+// Traite les commandes avancées (détection, conditionnelles, attaque, suivi)
 function processAdvancedCommands(u, cmds) {
   // Nouvelles commandes:
   // 5 = DETECTE (suivi de la cible à détecter)
@@ -1162,13 +1290,30 @@ function processAdvancedCommands(u, cmds) {
   // 20 = QG_ENNEMIE (QG ennemie)
   // 2 = ATTAQUE
   // 3 = SOIGNER
+  // 'FOLLOW' = SUIVRE (suivi d'une unité spécifique par ID) - PRIORITÉ MAXIMALE
   
-  // Traiter les commandes dans l'ordre
+  // Traiter les commandes dans l'ordre de priorité
   
-  // D'abord vérifier s'il y a une structure SI...ALORS...SINON
+  // PRIORITÉ 1: SI...ALORS...SINON
   const siIndex = cmds.indexOf(11); // SI
   if (siIndex !== -1) {
     return processConditionalCommand(u, cmds, siIndex);
+  }
+
+  // PRIORITÉ 2: Commande de suivi (ensuite)
+  // Supporte les 2 formes: [4, id] ou [4, 21, id]
+  let followIndex = cmds.indexOf(4);
+  if (followIndex !== -1) {
+    let targetId = null;
+    if (followIndex + 2 < cmds.length && cmds[followIndex + 1] === 21) {
+      targetId = cmds[followIndex + 2];
+    } else if (followIndex + 1 < cmds.length) {
+      targetId = cmds[followIndex + 1];
+    }
+    if (targetId != null) {
+      console.log(`Unité ${u.id}: Commande de suivi vers unité ${targetId} (après conditions)`);
+      return processFollowCommand(u, targetId);
+    }
   }
   
   // Traiter les commandes de déplacement vers QG ennemie [7, 20]
@@ -1298,6 +1443,122 @@ function processAdvancedCommands(u, cmds) {
   return null; // Aucune commande avancée trouvée
 }
 
+// Traite les commandes de suivi d'une unité spécifique
+function processFollowCommand(u, targetId) {
+  console.log(`Unité ${u.id}: Traitement commande de suivi vers unité ${targetId}`);
+  // Mémoriser la cible suivie pour d'autres actions (ex: soin)
+  u.followTargetId = targetId;
+  
+  // Vérifier si l'unité peut se déplacer
+  if (!hasWorkingMovementModule(u)) {
+    console.log(`Unité ${u.id}: Pas de module de mouvement fonctionnel`);
+    return { moved: false };
+  }
+  // Ne pas démarrer un nouveau déplacement si une animation est en cours
+  if (isAnimationActive(u)) {
+    return { moved: false };
+  }
+  
+  // Chercher l'unité cible
+  const targetUnit = state.units.find(unit => unit.id === targetId);
+  if (!targetUnit) {
+    console.log(`Unité ${u.id}: Unité cible ${targetId} non trouvée, reste immobile`);
+    return { moved: false };
+  }
+  
+  // Calculer la distance vers la cible
+  const distance = Math.abs(u.x - targetUnit.x) + Math.abs(u.y - targetUnit.y);
+  
+  // Si on est déjà à distance 2, rester sur place
+  if (distance === 2) {
+    console.log(`Unité ${u.id}: Déjà à distance 2 de la cible ${targetId} (distance: ${distance})`);
+    return { moved: false };
+  }
+  
+  // Si on est trop proche (distance 0 ou 1), s'éloigner
+  if (distance <= 1) {
+    console.log(`Unité ${u.id}: Trop proche de la cible ${targetId}, s'éloigner`);
+    const dirs = [[1,0], [-1,0], [0,1], [0,-1], [1,1], [1,-1], [-1,1], [-1,-1]];
+    for (const [dx, dy] of dirs) {
+      const nx = u.x + dx;
+      const ny = u.y + dy;
+      if (isInBounds(nx, ny) && !isBlocked(nx, ny) && !unitAt(nx, ny)) {
+        console.log(`Unité ${u.id}: S'éloigne vers (${nx}, ${ny})`);
+        const now = performance.now();
+        const speedModifier = getSpeedModifier(u);
+        const baseDuration = Math.max(120, Math.floor(1000 / state.unitSpeedTilesPerSec));
+        const tileDuration = speedModifier > 0 ? Math.floor(baseDuration / speedModifier) : baseDuration * 10;
+        u.anim = { fromX: u.x, fromY: u.y, toX: nx, toY: ny, startTime: now, endTime: now + tileDuration };
+        const ang = Math.atan2(ny - u.y, nx - u.x);
+        u.headingFrom = (u.headingTo ?? ang);
+        u.headingTo = ang;
+        u.headingStart = now; u.headingEnd = now + tileDuration;
+        updateRecentTrail(u, u.x, u.y);
+        u.x = nx; u.y = ny; u.lastDir = [dx, dy];
+        const pm = state.playerMaps[u.ownerIndex]; if (pm && pm.knownFree) pm.knownFree.add(`${u.x},${u.y}`);
+        return { moved: true };
+      }
+    }
+    console.log(`Unité ${u.id}: Impossible de s'éloigner de la cible`);
+    return { moved: false };
+  }
+  
+  // Calculer la position cible à distance 2 de l'unité cible
+  const targetX = targetUnit.x;
+  const targetY = targetUnit.y;
+  
+  // Trouver la meilleure position à distance 2 de la cible
+  const dirs = [[2,0], [-2,0], [0,2], [0,-2], [2,2], [2,-2], [-2,2], [-2,-2], [1,1], [1,-1], [-1,1], [-1,-1]];
+  let bestPosition = null;
+  let shortestPath = Infinity;
+  
+  for (const [dx, dy] of dirs) {
+    const nx = targetX + dx;
+    const ny = targetY + dy;
+    
+    // Vérifier que la position est valide et libre
+    if (isInBounds(nx, ny) && !isBlocked(nx, ny) && !unitAt(nx, ny)) {
+      // Calculer le chemin vers cette position
+      const stepTo = planStepToTarget(u, nx, ny);
+      if (stepTo) {
+        // Calculer la distance du chemin
+        const pathDistance = Math.abs(u.x - stepTo.x) + Math.abs(u.y - stepTo.y);
+        if (pathDistance < shortestPath) {
+          shortestPath = pathDistance;
+          bestPosition = { x: nx, y: ny };
+        }
+      }
+    }
+  }
+  
+  if (bestPosition) {
+    console.log(`Unité ${u.id}: Déplacement vers position à distance 2 de unité ${targetId} à (${bestPosition.x}, ${bestPosition.y})`);
+    
+    // Utiliser la fonction de déplacement vers la position cible
+    const stepTo = planStepToTarget(u, bestPosition.x, bestPosition.y);
+    if (stepTo) {
+      console.log(`Unité ${u.id}: Chemin trouvé vers position de suivi`);
+      const now = performance.now();
+      const speedModifier = getSpeedModifier(u);
+      const baseDuration = Math.max(120, Math.floor(1000 / state.unitSpeedTilesPerSec));
+      const tileDuration = speedModifier > 0 ? Math.floor(baseDuration / speedModifier) : baseDuration * 10;
+      u.anim = { fromX: u.x, fromY: u.y, toX: stepTo.x, toY: stepTo.y, startTime: now, endTime: now + tileDuration };
+      const ang = Math.atan2(stepTo.y - u.y, stepTo.x - u.x);
+      u.headingFrom = (u.headingTo ?? ang);
+      u.headingTo = ang;
+      u.headingStart = now; u.headingEnd = now + tileDuration;
+      updateRecentTrail(u, u.x, u.y);
+      u.x = stepTo.x; u.y = stepTo.y; u.lastDir = [Math.sign(stepTo.x - u.anim.fromX), Math.sign(stepTo.y - u.anim.fromY)];
+      const pm = state.playerMaps[u.ownerIndex]; if (pm && pm.knownFree) pm.knownFree.add(`${u.x},${u.y}`);
+      return { moved: true };
+    }
+  }
+  
+  console.log(`Unité ${u.id}: Aucun chemin trouvé vers position de suivi, reste immobile`);
+  // Rester immobile si aucun chemin n'est trouvé
+  return { moved: false };
+}
+
 // Fonction pour fuir un ennemi
 function fleeFromEnemy(u, enemy) {
   const dirs = [[1,0], [-1,0], [0,1], [0,-1], [1,1], [1,-1], [-1,1], [-1,-1]];
@@ -1358,8 +1619,19 @@ function processHealCommand(u) {
     return executeExploreAction(u);
   }
   
-  // Chercher l'unité alliée la plus proche qui a besoin de soins
-  const nearestAlly = findNearestAllyNeedingHeal(u);
+  // Cible explicite si fournie (3 #ID) ou cible suivie par défaut
+  let nearestAlly = null;
+  if (u.explicitHealTargetId != null) {
+    const tgt = state.units.find(x => x.id === u.explicitHealTargetId && x.ownerIndex === u.ownerIndex);
+    delete u.explicitHealTargetId;
+    if (tgt) nearestAlly = tgt;
+  }
+  if (!nearestAlly && u.followTargetId != null) {
+    const tgt = state.units.find(x => x.id === u.followTargetId && x.ownerIndex === u.ownerIndex);
+    if (tgt) nearestAlly = tgt;
+  }
+  // Sinon, chercher l'unité alliée la plus proche qui a besoin de soins
+  if (!nearestAlly) nearestAlly = findNearestAllyNeedingHeal(u);
   if (!nearestAlly) {
     console.log(`Unité ${u.id}: Aucune unité alliée à soigner trouvée`);
     return executeExploreAction(u);
@@ -1375,13 +1647,16 @@ function processHealCommand(u) {
     
     // Vérifier si assez de temps s'est écoulé depuis le dernier soin
     if (!u.lastHealTime || (now - u.lastHealTime) >= healCooldown) {
+      // Vérifier si la cible a encore besoin de soins avant de lancer le soin/animation
+      const needsHealNow = nearestAlly.modules && nearestAlly.modules.some(m => m.hp < m.maxHp && m.hp > 0);
+      if (!needsHealNow) {
+        // Stopper tout laser de soin actif si plus besoin
+        state.activeLasers = state.activeLasers.filter(laser => laser.unitId !== u.id || !laser.isHeal);
+        return { moved: false };
+      }
       const healAmount = calculateHealAmount(u);
       console.log(`Unité ${u.id} soigne l'unité ${nearestAlly.id} pour ${healAmount} points de vie`);
-      
-      // Soigner l'unité alliée
       healUnit(nearestAlly, healAmount);
-      
-      // Créer l'animation de soin
       createContinuousHealLaser(u, nearestAlly, state.playerColors[u.ownerIndex]);
       
       // Enregistrer le temps de ce soin
@@ -1390,26 +1665,26 @@ function processHealCommand(u) {
       return { moved: false }; // Le soin ne compte pas comme un mouvement
     } else {
       // En attente du cooldown, maintenir la distance optimale
-      const currentDistance = Math.abs(u.x - nearestAlly.x) + Math.abs(u.y - nearestAlly.y);
-      if (currentDistance < 4) {
-        // Trop proche, s'éloigner légèrement
-        console.log(`Unité ${u.id} en cooldown de soin, s'éloigne légèrement de la cible`);
-        return moveTowardTarget(u, u.x + (u.x - nearestAlly.x), u.y + (u.y - nearestAlly.y)) ? { moved: true } : { moved: false };
-      } else if (currentDistance > 6) {
-        // Trop loin, se rapprocher
-        console.log(`Unité ${u.id} en cooldown de soin, se rapproche de la cible`);
-        return moveTowardTarget(u, nearestAlly.x, nearestAlly.y) ? { moved: true } : { moved: false };
-      } else {
-        // Distance optimale, rester sur place
-        const remainingCooldown = Math.ceil((healCooldown - (now - u.lastHealTime)) / 1000);
-        console.log(`Unité ${u.id} en cooldown de soin (${remainingCooldown}s restantes), distance optimale`);
+      // Pendant le cooldown, vérifier si la cible a encore besoin de soins
+      const needsHealDuringCooldown = nearestAlly.modules && nearestAlly.modules.some(m => m.hp < m.maxHp && m.hp > 0);
+      if (!needsHealDuringCooldown) {
+        state.activeLasers = state.activeLasers.filter(laser => laser.unitId !== u.id || !laser.isHeal);
         return { moved: false };
       }
+      // Maintenir la distance adaptée (se rapprocher si trop loin)
+      const currentDistance = Math.abs(u.x - nearestAlly.x) + Math.abs(u.y - nearestAlly.y);
+      if (currentDistance > 6) {
+        console.log(`Unité ${u.id} en cooldown de soin, se rapproche de la cible`);
+        return processFollowCommand(u, nearestAlly.id);
+      }
+      const remainingCooldown = Math.ceil((healCooldown - (now - u.lastHealTime)) / 1000);
+      console.log(`Unité ${u.id} en cooldown de soin (${remainingCooldown}s restantes), distance optimale`);
+      return { moved: false };
     }
   } else {
-    // Pas à portée, se rapprocher de la cible
-    console.log(`Unité ${u.id} se rapproche de l'unité alliée à soigner (distance: ${distance})`);
-    return moveTowardTarget(u, nearestAlly.x, nearestAlly.y) ? { moved: true } : { moved: false };
+    // Pas à portée, se rapprocher (utilise le même comportement que suivre pour être fluide)
+    console.log(`Unité ${u.id} se rapproche de l'unité alliée à soigner/suivre (distance: ${distance})`);
+    return processFollowCommand(u, nearestAlly.id);
   }
 }
 
@@ -1433,6 +1708,30 @@ function processAttackCommand(u) {
   
   let nearestEnemy = null;
   let attackType = null;
+  
+  // Cible explicite si fournie (2 #ID)
+  if (u.explicitTargetId != null) {
+    const tgtUnit = state.units.find(x => x.id === u.explicitTargetId && x.ownerIndex !== u.ownerIndex);
+    // Nettoyer le flag pour ne pas persister entre frames
+    delete u.explicitTargetId;
+    if (tgtUnit) {
+      const dist = Math.abs(u.x - tgtUnit.x) + Math.abs(u.y - tgtUnit.y);
+      // Prioriser l'attaque distance si possible, sinon se rapprocher
+      const hasRangedAttack = u.modules && u.modules.some(m => m.type === 'ranged_attack' && m.hp > 0);
+      const hasMeleeAttack = u.modules && u.modules.some(m => m.type === 'attack' && m.hp > 0);
+      if (hasRangedAttack && dist <= 6) {
+        nearestEnemy = { type: 'unit', target: tgtUnit, x: tgtUnit.x, y: tgtUnit.y };
+        attackType = 'ranged';
+      } else if (hasMeleeAttack && dist <= 1) {
+        nearestEnemy = { type: 'unit', target: tgtUnit, x: tgtUnit.x, y: tgtUnit.y };
+        attackType = 'melee';
+      } else {
+        // Se rapprocher de la cible explicite si pas à portée
+        console.log(`Unité ${u.id}: Poursuite de la cible explicite ${tgtUnit.id}`);
+        return moveTowardTarget(u, tgtUnit.x, tgtUnit.y) ? { moved: true } : { moved: false };
+      }
+    }
+  }
   
   if (hasRangedAttack) {
     // Chercher d'abord des ennemis à portée d'attaque à distance (6 cases)
@@ -1614,6 +1913,57 @@ function calculateHealAmount(u) {
   return healModules.length * 12; // 12 points de vie par module de soin
 }
 
+// Endommage une unité
+function damageUnit(unit, damage, attackType = 'melee') {
+  if (!unit.modules || unit.modules.length === 0) {
+    console.log(`Unité ${unit.id}: Aucun module à endommager`);
+    return;
+  }
+  
+  console.log(`Unité ${unit.id}: ${damage} dégâts ${attackType}`);
+  
+  // Priorité des dégâts selon le type d'attaque
+  let modulesToDamage = [];
+  
+  if (attackType === 'melee') {
+    // Attaque CAC: priorité aux boucliers, puis aux modules de mouvement
+    const shieldModules = unit.modules.filter(m => m.type === 'shield' && m.hp > 0);
+    const movementModules = unit.modules.filter(m => m.type === 'movement' && m.hp > 0);
+    const otherModules = unit.modules.filter(m => m.type !== 'shield' && m.type !== 'movement' && m.hp > 0);
+    
+    modulesToDamage = [...shieldModules, ...movementModules, ...otherModules];
+  } else {
+    // Attaque à distance: priorité aux modules de mouvement, puis aux autres
+    const movementModules = unit.modules.filter(m => m.type === 'movement' && m.hp > 0);
+    const otherModules = unit.modules.filter(m => m.type !== 'movement' && m.hp > 0);
+    
+    modulesToDamage = [...movementModules, ...otherModules];
+  }
+  
+  if (modulesToDamage.length === 0) {
+    console.log(`Unité ${unit.id}: Aucun module fonctionnel à endommager`);
+    return;
+  }
+  
+  // Appliquer les dégâts
+  let remainingDamage = damage;
+  for (const module of modulesToDamage) {
+    if (remainingDamage <= 0) break;
+    
+    const damageToApply = Math.min(remainingDamage, module.hp);
+    module.hp -= damageToApply;
+    remainingDamage -= damageToApply;
+    
+    console.log(`Module ${module.type} endommagé: ${module.hp}/100 HP`);
+    
+    if (module.hp <= 0) {
+      console.log(`Module ${module.type} détruit!`);
+    }
+  }
+  
+  console.log(`Unité ${unit.id} endommagée pour ${damage - remainingDamage} points de vie`);
+}
+
 // Soigne une unité
 function healUnit(unit, healAmount) {
   // Soigner les modules endommagés (mais pas ceux à 0 HP)
@@ -1657,6 +2007,25 @@ function healUnit(unit, healAmount) {
   console.log(`Unité ${unit.id} soignée pour ${healAmount - remainingHeal} points de vie`);
 }
 
+// Vérifie si une case est une cellule de QG
+function isHQCell(x, y) {
+  for (const hq of state.hqs) {
+    const dx = Math.abs(x - hq.cx);
+    const dy = Math.abs(y - hq.cy);
+    if (dx <= HQ_HALF_SPAN && dy <= HQ_HALF_SPAN) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Vérifie si une unité est au périmètre d'un QG
+function isAtHQPerimeter(x, y, hq) {
+  const dx = Math.abs(x - hq.cx);
+  const dy = Math.abs(y - hq.cy);
+  return dx <= HQ_PERIM_RADIUS && dy <= HQ_PERIM_RADIUS;
+}
+
 // Vérifie si une unité est en train d'attaquer (QG ou autre unité)
 function isUnitAttacking(u) {
   const nearestEnemy = findNearestEnemyUnit(u);
@@ -1683,127 +2052,47 @@ function processConditionalCommand(u, cmds, siIndex) {
     console.log(`Unité ${u.id}: Structure SI sans ALORS`);
     return null;
   }
-  
-  // Vérifier si l'unité est déjà en train d'attaquer (QG ou unité)
-  const isAttackingEnemy = isUnitAttacking(u);
-  
-  // Vérifier si l'unité a des modules de soin (pour permettre les soins même sans ennemi)
-  const hasHealModules = u.modules && u.modules.some(m => m.type === 'heal' && m.hp > 0);
-  
-  // D'abord, exécuter les commandes avant SI (comme l'exploration) seulement si pas en train d'attaquer
+  // Déclarer les commandes avant SI (utilisées seulement en fallback)
   const commandesAvantSI = cmds.slice(0, siIndex);
   console.log(`Unité ${u.id}: Commandes avant SI:`, commandesAvantSI);
-  console.log(`Unité ${u.id}: En train d'attaquer:`, isAttackingEnemy);
-  console.log(`Unité ${u.id}: A des modules de soin:`, hasHealModules);
-  
-  let hasMoved = false;
-  // Permettre l'exploration si pas en train d'attaquer OU si l'unité a des modules de soin
-  if (commandesAvantSI.length > 0 && (!isAttackingEnemy || hasHealModules)) {
-    const resultPrelim = executeAction(u, commandesAvantSI);
-    console.log(`Unité ${u.id}: Résultat commandes préliminaires:`, resultPrelim);
-    hasMoved = resultPrelim && resultPrelim.moved;
-    
-    // Si l'unité a déjà bougé, ne pas exécuter d'autres actions cette frame
-    // SAUF pour les unités de soin qui peuvent soigner après avoir bougé
-    if (hasMoved && !hasHealModules) {
-      console.log(`Unité ${u.id}: Déjà bougé cette frame, pas d'action supplémentaire`);
-      return resultPrelim;
-    }
-  } else if (isAttackingEnemy && !hasHealModules) {
-    console.log(`Unité ${u.id}: Attaque en cours, pas d'exploration préliminaire`);
-  }
-  
-  // Vérifier si l'unité a déjà agi cette frame (protection pour les unités en combat)
-  // Mais permettre le mouvement si l'unité est en train d'attaquer et qu'elle doit bouger
-  // OU si l'unité a des modules de soin (pour permettre les soins)
-  if (u.lastActionFrame === state.currentFrame) {
-    // Si l'unité est en train d'attaquer et qu'elle doit bouger (poursuite/fuite), permettre le mouvement
-    if (isAttackingEnemy) {
-      // Limiter la fréquence des actions en combat (toutes les 4 frames au lieu de chaque frame)
-      if (state.currentFrame % 4 === 0) {
-        // Permettre le mouvement
-      } else {
-        return { moved: false };
-      }
-    } else if (hasHealModules) {
-      // Permettre aux unités de soin d'agir même si elles ont déjà agi cette frame
-      // (mais limiter la fréquence pour éviter le spam)
-      if (state.currentFrame % 2 === 0) {
-        // Permettre l'action de soin
-      } else {
-        // Ne pas bloquer complètement, permettre l'évaluation de la condition
-        // mais limiter l'exécution de l'action
-        console.log(`Unité ${u.id}: Unité de soin, action limitée par cooldown`);
-        // Continuer pour permettre l'évaluation de la condition
-      }
-    } else {
-      return { moved: false };
-    }
-  }
-  
-  // Extraire la condition (entre SI et ALORS)
+
+  // Extraire et évaluer la condition (entre SI et ALORS)
   const condition = cmds.slice(siIndex + 1, alorsIndex);
   console.log(`Unité ${u.id}: Condition à évaluer:`, condition);
-  
-  // Évaluer la condition
   const conditionResult = evaluateCondition(u, condition);
   console.log(`Unité ${u.id}: Résultat de la condition:`, conditionResult);
-  
+
+  // Choisir la branche
   let actionToExecute = [];
   if (conditionResult) {
-    // Exécuter la partie ALORS
-    if (sinonIndex !== -1) {
-      actionToExecute = cmds.slice(alorsIndex + 1, sinonIndex);
-    } else {
-      actionToExecute = cmds.slice(alorsIndex + 1);
-    }
+    // ALORS
+    if (sinonIndex !== -1) actionToExecute = cmds.slice(alorsIndex + 1, sinonIndex);
+    else actionToExecute = cmds.slice(alorsIndex + 1);
   } else if (sinonIndex !== -1) {
-    // Exécuter la partie SINON
+    // SINON
     actionToExecute = cmds.slice(sinonIndex + 1);
   } else {
-    // Pas de SINON et condition fausse : ne pas continuer l'exploration si on a déjà bougé
-    if (!hasMoved && commandesAvantSI.length > 0 && (!isAttackingEnemy || hasHealModules)) {
-      console.log(`Unité ${u.id}: Condition fausse, continuation de l'exploration`);
-      actionToExecute = commandesAvantSI;
-    } else if (hasMoved) {
-      console.log(`Unité ${u.id}: Condition fausse mais déjà bougé, pas d'action supplémentaire`);
-    } else if (isAttackingEnemy && !hasHealModules) {
-      console.log(`Unité ${u.id}: En attaque, pas d'exploration automatique`);
-    }
+    // Pas de SINON : fallback sur commandes avant SI (ex: exploration)
+    actionToExecute = commandesAvantSI;
   }
-  
-  // Exécuter l'action conditionnelle
+
   console.log(`Unité ${u.id}: Action à exécuter:`, actionToExecute);
-            if (actionToExecute.length > 0) {
-            const isActionMove = actionToExecute.includes(6) || actionToExecute.includes(7); // 6=explore, 7=move_to_hq
-            const isActionHeal = actionToExecute.includes(3);
-            const isActionAttack = actionToExecute.includes(2);
+  if (actionToExecute && actionToExecute.length > 0) {
+    // Autoriser une action secondaire (attaque/soin) après un mouvement (6/7) dans le même tick
+    const isMove = actionToExecute.includes(6) || actionToExecute.includes(7);
+    const result = executeAction(u, actionToExecute);
+    if (isMove && result && result.moved) {
+      // Autoriser seulement une attaque immédiate après un mouvement, pas un soin
+      if (actionToExecute.includes(2)) {
+        const res2 = executeAction(u, [2]);
+        u.lastActionFrame = state.currentFrame;
+        return res2 || result;
+      }
+    }
+    u.lastActionFrame = state.currentFrame;
+    return result;
+  }
 
-            if (hasMoved && isActionMove) {
-              // Si l'unité a déjà bougé cette frame et que l'action conditionnelle est aussi un mouvement,
-              // empêcher le double mouvement
-              console.log(`Unité ${u.id}: Déjà bougé cette frame, ne peut pas exécuter une action de mouvement supplémentaire.`);
-              return { moved: true }; // Retourner true car elle a déjà bougé
-            }
-
-            // Permettre les actions de soin/attaque même si l'unité a bougé
-            if (hasMoved && (isActionHeal || isActionAttack)) {
-              console.log(`Unité ${u.id}: Exécution de l'action ${isActionHeal ? 'de soin' : 'd\'attaque'} après mouvement.`);
-              const result = executeAction(u, actionToExecute);
-              u.lastActionFrame = state.currentFrame;
-              return result;
-            }
-
-            // Pour tous les autres cas (pas bougé, ou action n'est pas un mouvement, ou soigneur faisant une action non-mouvement)
-            const result = executeAction(u, actionToExecute);
-            console.log(`Unité ${u.id}: Résultat de l'action:`, result);
-
-            // Marquer que l'unité a agi cette frame
-            u.lastActionFrame = state.currentFrame;
-
-            return result;
-          }
-  
   console.log(`Unité ${u.id}: Aucune action à exécuter`);
   return { moved: false };
 }
@@ -1817,6 +2106,16 @@ function evaluateCondition(u, condition) {
   
   // 5 = DETECTE
   if (command === 5) {
+    // 5 21 X : détecte unité d'ID X
+    if (target === 21 && condition.length >= 3) {
+      const id = condition[2];
+      return detectUnitById(u, id);
+    }
+    // 21 = TARGET_ID (marqueur interne "#ID")
+    if (target === 21 && condition.length >= 3) {
+      const specificId = condition[2];
+      return detectUnitById(u, specificId);
+    }
     // 12 = ROBOT_ENNEMIE (unité ennemie)
     if (target === 12) {
       return detectEnemyUnit(u);
@@ -1875,6 +2174,17 @@ function detectAllyUnit(u) {
   return allyUnits.length > 0;
 }
 
+// Détecte une unité par ID exact à proximité raisonnable
+function detectUnitById(u, id) {
+  const target = state.units.find(unit => unit.id === id);
+  if (!target) return false;
+  const detectionRange = 12; // marge confortable
+  return (
+    Math.abs(target.x - u.x) <= detectionRange &&
+    Math.abs(target.y - u.y) <= detectionRange
+  );
+}
+
 // Détecte s'il y a un QG à proximité
 function detectHQ(u) {
   const detectionRange = 5; // Portée de détection pour les QG
@@ -1906,13 +2216,42 @@ function detectEnemyHQ(u) {
 function executeAction(u, action) {
   console.log(`Unité ${u.id}: Exécution de l'action:`, action);
   
+  // Normaliser les marqueurs de cible [21, id] -> targetId local
+  let explicitTargetId = null;
+  for (let i = 0; i < action.length; i++) {
+    if (action[i] === 21 && i + 1 < action.length) {
+      explicitTargetId = action[i + 1];
+      break;
+    }
+  }
+
+  // 4 [#]ID : SUIVRE une cible précise
+  if (action[0] === 4) {
+    const id = explicitTargetId != null ? explicitTargetId : (action.length >= 2 ? action[1] : null);
+    if (id != null) {
+      return processFollowCommand(u, id);
+    }
+    return { moved: false };
+  }
+
+  // 2 #ID : ATTAQUE cible précise
+  if (action[0] === 2 && explicitTargetId != null) {
+    u.explicitTargetId = explicitTargetId; // utilisé par processAttackCommand
+    const res = processAttackCommand(u);
+    // ne pas supprimer immédiatement pour permettre la poursuite au prochain tick si besoin
+    return res;
+  }
+
   if (action.includes(2)) {
-    // Action d'attaque
+    // Action d'attaque (si cible explicite fournie, elle est déjà placée dans u.explicitTargetId)
     return processAttackCommand(u);
   }
   
   if (action.includes(3)) {
-    // Action de soin
+    // Action de soin (optionnellement ciblée)
+    if (explicitTargetId != null) {
+      u.explicitHealTargetId = explicitTargetId; // utilisé par processHealCommand
+    }
     return processHealCommand(u);
   }
   
@@ -2020,6 +2359,12 @@ function executeAction(u, action) {
     }
   }
   
+  // Si l'action est [7, 21, id] => maintenir la proximité (équivalent suivi à 2 cases)
+  if (action.length >= 3 && action[0] === 7 && action[1] === 21) {
+    const id = action[2];
+    return processFollowCommand(u, id);
+  }
+
   // Action de déplacement vers QG ennemie [7, 20]
   if (action.length === 2 && action[0] === 7 && action[1] === 20) {
     console.log(`Unité ${u.id}: Déplacement vers QG ennemie`);
@@ -2088,15 +2433,38 @@ function executeAction(u, action) {
   if (action.length === 2 && action[0] === 7 && action[1] === 18) {
     console.log(`Unité ${u.id}: Déplacement vers son QG`);
     
-    // Vérifier si l'unité peut se déplacer
     if (!hasWorkingMovementModule(u)) {
       console.log(`Unité ${u.id}: Pas de module de mouvement fonctionnel`);
+      return { moved: false };
+    }
+    // Ne pas empiler si une anim est en cours
+    if (isAnimationActive(u)) {
       return { moved: false };
     }
     
     const myHq = state.hqs.find(h => h.colorKey === state.playerColors[u.ownerIndex]);
     if (myHq) {
-      console.log(`Unité ${u.id}: Son QG ${myHq.colorKey} trouvé à (${myHq.cx}, ${myHq.cy})`);
+      if (isAtHQPerimeter(u.x, u.y, myHq)) {
+        console.log(`Unité ${u.id}: Déjà au périmètre de son QG (${myHq.colorKey}), arrêt`);
+        return { moved: false };
+      }
+      const stepTo = planStepToHQUsingSharedMap(u, myHq);
+      if (stepTo) {
+        const now = performance.now();
+        const speedModifier = getSpeedModifier(u);
+        const baseDuration = Math.max(120, Math.floor(1000 / state.unitSpeedTilesPerSec));
+        const tileDuration = speedModifier > 0 ? Math.floor(baseDuration / speedModifier) : baseDuration * 10;
+        u.anim = { fromX: u.x, fromY: u.y, toX: stepTo.x, toY: stepTo.y, startTime: now, endTime: now + tileDuration };
+        const ang = Math.atan2(stepTo.y - u.y, stepTo.x - u.x);
+        u.headingFrom = (u.headingTo ?? ang);
+        u.headingTo = ang;
+        u.headingStart = now; u.headingEnd = now + tileDuration;
+        updateRecentTrail(u, u.x, u.y);
+        u.x = stepTo.x; u.y = stepTo.y; u.lastDir = [Math.sign(stepTo.x - u.anim.fromX), Math.sign(stepTo.y - u.anim.fromY)];
+        const pm2 = state.playerMaps[u.ownerIndex]; if (pm2 && pm2.knownFree) pm2.knownFree.add(`${u.x},${u.y}`);
+        return { moved: true };
+      }
+      // Fallback: avancer vers la zone du QG même sans chemin connu
       const didMove = moveTowardOrExploreInline(u, myHq.cx, myHq.cy);
       return { moved: didMove };
     } else {
@@ -2333,6 +2701,105 @@ function planStepToDiscoveredHQ(u, hq) {
 
     for (const [nx, ny] of neighbors) {
       if (!isGloballyWalkable(nx, ny)) continue;
+      if (unitAt(nx, ny)) continue;
+
+      const neighborKey = `${nx},${ny}`;
+      const tentativeG = (gScore.get(current) || 0) + 1;
+
+      if (!gScore.has(neighborKey) || tentativeG < gScore.get(neighborKey)) {
+        cameFrom.set(neighborKey, current);
+        gScore.set(neighborKey, tentativeG);
+        const h = Math.abs(nx - targetX) + Math.abs(ny - targetY);
+        fScore.set(neighborKey, tentativeG + h);
+        openSet.add(neighborKey);
+      }
+    }
+  }
+
+  console.log(`DEBUG: Aucun chemin A* trouvé de (${u.x}, ${u.y}) vers (${targetX}, ${targetY})`);
+  return null; // Aucun chemin trouvé
+}
+
+// Planifie un déplacement vers une cible spécifique en utilisant la connaissance globale
+function planStepToTarget(u, targetX, targetY) {
+  console.log(`DEBUG planStepToTarget: Unité ${u.id} à (${u.x}, ${u.y}) vers cible à (${targetX}, ${targetY})`);
+  
+  // Vérifier si l'unité est déjà à la cible
+  if (u.x === targetX && u.y === targetY) {
+    console.log(`DEBUG: Unité ${u.id} déjà à la cible`);
+    return null;
+  }
+  
+  // Utilise la carte globale (state.tiles) pour la navigation
+  const startKey = `${u.x},${u.y}`;
+  const goalKey = `${targetX},${targetY}`;
+
+  // Fonction qui utilise la connaissance globale de la carte
+  const isGloballyWalkable = (x, y) => {
+    if (!isInBounds(x, y)) return false;
+    if (isHQCell(x, y)) return false; // Aucune cellule HQ n'est traversable
+    if (state.tiles[y] && state.tiles[y][x]) return false; // Mur global
+    return true;
+  };
+
+  console.log(`DEBUG: Position de départ (${u.x}, ${u.y}) walkable: ${isGloballyWalkable(u.x, u.y)}`);
+  console.log(`DEBUG: Position cible (${targetX}, ${targetY}) walkable: ${isGloballyWalkable(targetX, targetY)}`);
+  
+  if (!isGloballyWalkable(u.x, u.y)) {
+    console.log(`DEBUG: Position de départ non walkable`);
+    return null;
+  }
+  
+  if (!isGloballyWalkable(targetX, targetY)) {
+    console.log(`DEBUG: Position cible non walkable`);
+    return null;
+  }
+
+  // A* avec carte globale
+  const openSet = new Set([startKey]);
+  const cameFrom = new Map();
+  const gScore = new Map();
+  const fScore = new Map();
+
+  gScore.set(startKey, 0);
+  fScore.set(startKey, Math.abs(u.x - targetX) + Math.abs(u.y - targetY));
+
+  while (openSet.size > 0) {
+    let current = null;
+    let lowestF = Infinity;
+    for (const key of openSet) {
+      const f = fScore.get(key) || Infinity;
+      if (f < lowestF) {
+        lowestF = f;
+        current = key;
+      }
+    }
+
+    if (!current) break;
+    openSet.delete(current);
+
+    if (current === goalKey) {
+      // Reconstruire le chemin
+      const path = [];
+      let temp = current;
+      while (cameFrom.has(temp)) {
+        const [x, y] = temp.split(',').map(Number);
+        path.unshift({ x, y });
+        temp = cameFrom.get(temp);
+      }
+      return path.length > 0 ? path[0] : null;
+    }
+
+    const [cx, cy] = current.split(',').map(Number);
+    const neighbors = [
+      [cx + 1, cy], [cx - 1, cy], [cx, cy + 1], [cx, cy - 1],
+      [cx + 1, cy + 1], [cx + 1, cy - 1], [cx - 1, cy + 1], [cx - 1, cy - 1]
+    ];
+
+    for (const [nx, ny] of neighbors) {
+      if (!isGloballyWalkable(nx, ny)) continue;
+      
+      // Empêcher les unités de se chevaucher - aucune unité ne peut occuper la même case
       if (unitAt(nx, ny)) continue;
 
       const neighborKey = `${nx},${ny}`;
@@ -2798,6 +3265,17 @@ function stopSimulation() {
 function moveTowardTarget(u, targetX, targetY) {
   if (!hasWorkingMovementModule(u)) return false;
   
+  // Ne pas empiler des déplacements si une animation est en cours
+  if (isAnimationActive(u)) return false;
+
+  const moved = moveTowardOrExploreInline(u, targetX, targetY);
+  return moved;
+}
+
+// Fonction pour déplacer une unité vers une cible avec connaissance globale
+function moveTowardEnemyHQWithPlayerKnowledge(u, targetX, targetY) {
+  if (!hasWorkingMovementModule(u)) return false;
+  
   const moved = moveTowardOrExploreInline(u, targetX, targetY);
   return moved;
 }
@@ -2835,6 +3313,10 @@ function executeExploreAction(u) {
   if (bestMove) {
     const nx = u.x + bestMove[0];
     const ny = u.y + bestMove[1];
+    // Respecter l'animation en cours: ne pas empiler un nouveau déplacement
+    if (isAnimationActive(u)) {
+      return { moved: false };
+    }
     const now = performance.now();
     const speedModifier = getSpeedModifier(u);
     const baseDuration = Math.max(120, Math.floor(1000 / state.unitSpeedTilesPerSec));
@@ -4308,9 +4790,50 @@ function hasAnyWorkingModule(unit) {
   return unit.modules.some(module => module.hp > 0);
 }
 
+// Calcule le modificateur de vitesse d'une unité basé sur ses modules de mouvement
+function getSpeedModifier(unit) {
+  if (!unit.modules || unit.modules.length === 0) return 1;
+  const movementModules = unit.modules.filter(m => m.type === 'movement' && m.hp > 0);
+  return Math.max(0.1, movementModules.length / 3); // Vitesse basée sur le nombre de modules de mouvement
+}
+
 // Enregistre le temps de déplacement d'une unité
 function recordUnitMove(unit) {
   unit.lastMoveTime = performance.now();
+}
+
+// Indique si une animation de déplacement est encore en cours
+function isAnimationActive(unit) {
+  return !!(unit.anim && performance.now() < unit.anim.endTime);
+}
+
+// Crée une explosion d'attaque
+function createAttackExplosion(tileX, tileY) {
+  const now = performance.now();
+  const duration = 400; // Durée plus courte pour les explosions d'attaque
+  const particleCount = 8; // Moins de particules pour les explosions d'attaque
+  const particles = [];
+  
+  // Créer les particules avec des directions aléatoires
+  for (let i = 0; i < particleCount; i++) {
+    const angle = (Math.PI * 2 * i) / particleCount + (Math.random() - 0.5) * 0.3;
+    const speed = 0.3 + Math.random() * 0.7;
+    particles.push({
+      x: 0, // Position relative au centre
+      y: 0,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      life: 1.0 // 1.0 = vivant, 0.0 = mort
+    });
+  }
+  
+  state.explosions.push({
+    tileX,
+    tileY,
+    startTime: now,
+    duration,
+    particles
+  });
 }
 
 // Crée une animation d'explosion à la position donnée
@@ -4324,6 +4847,35 @@ function createExplosion(tileX, tileY) {
   for (let i = 0; i < particleCount; i++) {
     const angle = (Math.PI * 2 * i) / particleCount + (Math.random() - 0.5) * 0.5;
     const speed = 0.5 + Math.random() * 1.0;
+    particles.push({
+      x: 0, // Position relative au centre
+      y: 0,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      life: 1.0 // 1.0 = vivant, 0.0 = mort
+    });
+  }
+  
+  state.explosions.push({
+    tileX,
+    tileY,
+    startTime: now,
+    duration,
+    particles
+  });
+}
+
+// Crée une explosion de QG
+function createHQExplosion(tileX, tileY) {
+  const now = performance.now();
+  const duration = 1500; // Durée plus longue pour les explosions de QG
+  const particleCount = 20; // Plus de particules pour les explosions de QG
+  const particles = [];
+  
+  // Créer les particules avec des directions aléatoires
+  for (let i = 0; i < particleCount; i++) {
+    const angle = (Math.PI * 2 * i) / particleCount + (Math.random() - 0.5) * 0.5;
+    const speed = 0.8 + Math.random() * 1.2;
     particles.push({
       x: 0, // Position relative au centre
       y: 0,
@@ -4423,9 +4975,14 @@ function cleanupActiveLasers() {
     
     // Vérifier si l'unité a encore des modules appropriés
     if (laser.isHeal) {
-      // Pour les lasers de soin, vérifier les modules de soin
+      // Pour les lasers de soin, vérifier les modules de soin et le besoin réel
       const hasHeal = attacker.modules && attacker.modules.some(m => m.type === 'heal' && m.hp > 0);
       if (!hasHeal) return false; // Plus de modules de soin
+      // Vérifier si la cible a encore des modules à soigner
+      const targetUnit = state.units.find(u => u.id === laser.targetId);
+      if (!targetUnit) return false;
+      const needsHeal = targetUnit.modules && targetUnit.modules.some(m => m.hp < m.maxHp && m.hp > 0);
+      if (!needsHeal) return false; // Stopper le laser si plus besoin
     } else {
       // Pour les lasers d'attaque, vérifier les modules d'attaque à distance
       const hasRangedAttack = attacker.modules && attacker.modules.some(m => m.type === 'ranged_attack' && m.hp > 0);
@@ -4676,6 +5233,35 @@ function drawLaserSparks(ctx, tile, ox, oy) {
     
     ctx.restore();
   }
+}
+
+// Crée des étincelles d'attaque CAC
+function createMeleeSparks(x, y) {
+  const now = performance.now();
+  const duration = 200; // Durée courte pour les étincelles CAC
+  const particleCount = 4; // Plus de particules pour l'attaque CAC
+  const particles = [];
+  
+  // Créer les particules d'étincelles CAC
+  for (let i = 0; i < particleCount; i++) {
+    const angle = (Math.PI * 2 * i) / particleCount + (Math.random() - 0.5) * 0.8;
+    const speed = 0.2 + Math.random() * 0.4; // Vitesse plus élevée pour les étincelles CAC
+    particles.push({
+      x: 0, // Position relative au centre
+      y: 0,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      life: 1.0, // 1.0 = vivant, 0.0 = mort
+      color: 'red' // Couleur rouge pour les étincelles CAC
+    });
+  }
+  
+  state.laserSparks.push({
+    x, y,
+    startTime: now,
+    duration,
+    particles
+  });
 }
 
 // Crée des étincelles discrètes à l'impact du laser
@@ -5143,6 +5729,12 @@ function drawStarIcon(ctx, size, color) {
 
   // Ouvre/ferme le panel lors du clic sur un QG du joueur actif
 document.addEventListener('click', (e) => {
+  // Ignorer si overlays modaux ouverts
+  const blockedByOverlay = (
+    (q('#programOverlay') && q('#programOverlay').classList.contains('visible')) ||
+    (q('#startOverlay') && q('#startOverlay').classList.contains('visible'))
+  );
+  if (blockedByOverlay) return;
   if (state.phase !== 'playing') return;
   const panel = q('#spawnPanel');
   const canvas = q('#game');
