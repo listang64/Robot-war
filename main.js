@@ -31,9 +31,12 @@ const state = {
   simRafId: null,
   // Cartographie partagée par joueur
   playerMaps: [],
+  // Gisements d'énergie
+  minerals: [], // { id, x, y, size: 'small'|'large', energy, energyMax, angle }
   // Sélection de modules pour la création d'unités
   selectedModules: { movement: 0, shield: 0, attack: 0, ranged_attack: 0, heal: 0 }, // index -> { knownWalls:Set<string>, knownFree:Set<string>, visitCounts:Map<string,number> }
   nextUnitId: 1,
+  nextMineralId: 1,
   nextLocalIdByPlayer: [],
   lastSimTime: 0,
   unitSpeedTilesPerSec: 4.0,
@@ -68,6 +71,7 @@ const HQ_CENTER_HOLE_METRICS = {
 
 function mountApp() {
   preloadHQImages();
+  preloadMineralImage();
   renderApp();
 }
 
@@ -119,6 +123,9 @@ function startGame() {
   state.rows = dims.rows;
   state.tiles = generateCaveMap(state.cols, state.rows);
   state.hqs = computeHQs(state.players);
+  state.minerals = [];
+  state.nextMineralId = 1;
+  spawnMinerals();
   state.units = [];
   // init cartographies partagées
   state.playerMaps = Array.from({ length: state.players }, () => ({ knownWalls: new Set(), knownFree: new Set(), visitCounts: new Map(), discoveredEnemyHQs: new Set() }));
@@ -145,6 +152,9 @@ function regenerateMapKeepPause() {
   state.tiles = generateCaveMap(state.cols, state.rows);
   state.hqs = computeHQs(state.players);
   // Réinitialise les unités et cartes partagées
+  state.minerals = [];
+  state.nextMineralId = 1;
+  spawnMinerals();
   state.units = [];
   state.nextUnitId = 1; // repart des IDs 1, 2, 3...
   state.programs = {}; // nettoie les anciens programmes liés à d'anciens IDs
@@ -344,6 +354,23 @@ function renderGame() {
   return wrapper;
 }
 
+// --- Overlay d'information gisement ---
+function openMineralOverlay(m) {
+  closeAnyDialog();
+  const overlay = el('div', { className: 'overlay', id: 'overlay' });
+  const content = el('div', { className: 'dialog' }, [
+    el('h2', { textContent: 'Gisement d\'énergie' }),
+    el('p', { textContent: `Taille: ${m.size === 'large' ? 'Grand' : 'Petit'}` }),
+    el('p', { textContent: `Énergie restante: ${m.energy} / ${m.energyMax}` }),
+    el('div', { className: 'row' }, [
+      button('Fermer', () => closeAnyDialog(), 'icon')
+    ])
+  ]);
+  overlay.append(content);
+  const board = q('.board');
+  if (board) board.append(overlay);
+}
+
 function button(label, onClick, className = '') {
   const b = el('button', { textContent: label, className });
   b.addEventListener('click', onClick);
@@ -540,6 +567,16 @@ function preloadHQImages() {
     img.src = path;
     HQ_IMAGES[key] = img;
   }
+}
+
+// --- Image minerais ---
+const MINERAL_IMAGE_PATH = 'images/minerais.png';
+let MINERAL_IMAGE = null;
+function preloadMineralImage() {
+  const img = new Image();
+  img.onload = () => { const canvas = q('#game'); if (canvas) drawScene(canvas); };
+  img.src = MINERAL_IMAGE_PATH;
+  MINERAL_IMAGE = img;
 }
 
 function togglePause() {
@@ -889,6 +926,13 @@ document.addEventListener('click', (e) => {
   const x = e.clientX - rect.left, y = e.clientY - rect.top;
   const { tile, ox, oy } = computeCanvasMetrics(canvas);
   const gx = Math.floor((x - ox) / tile), gy = Math.floor((y - oy) / tile);
+  // 1) Si on clique un gisement, ouvrir son overlay d'info
+  const m = state.minerals && state.minerals.find(mm => mm.x === gx && mm.y === gy);
+  if (m) {
+    openMineralOverlay(m);
+    return;
+  }
+  // 2) Sinon, gestion existante: cliquer une unité de sa couleur pour ouvrir la programmation
   const u = state.units.find(u => u.x === gx && u.y === gy && u.ownerIndex === state.currentPlayerIndex);
   if (!u) return;
   const ov = q('#programOverlay'); if (!ov) return;
@@ -3567,6 +3611,13 @@ function drawScene(canvas) {
   // - Zones jouables (sol) plus claires, bords arrondis, outline sombre
   if (state.tiles) drawCaveSurface(ctx, tile, ox, oy);
 
+  // Dessin des minerais (sous unités et QG)
+  if (state.minerals && state.minerals.length) {
+    for (const m of state.minerals) {
+      drawMineral(ctx, m, tile, ox, oy);
+    }
+  }
+
   // Dessin des unités d'abord (sous le QG)
   for (const u of state.units) {
     drawUnit(ctx, u, tile, ox, oy);
@@ -3582,6 +3633,62 @@ function drawScene(canvas) {
   // Dessiner les explosions par-dessus tout
   drawExplosions(ctx, tile, ox, oy);
 
+  ctx.restore();
+}
+
+// --- Rendu d'un gisement d'énergie ---
+function drawMineral(ctx, m, tile, ox, oy) {
+  const cx = ox + (m.x + 0.5) * tile;
+  const cy = oy + (m.y + 0.5) * tile;
+  // Tailles ajustées: petits = ancienne taille des gros; gros = encore plus grands
+  // Réduction légère des gros gisements
+  const baseSize = m.size === 'large' ? tile * 3.4 : tile * 1.7;
+
+  // Halo lumineux jaune
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  // Halo deux fois plus petit et plus transparent
+  const inner = baseSize * 0.11;
+  const outer = baseSize * 0.325;
+  const grad = ctx.createRadialGradient(cx, cy, inner, cx, cy, outer);
+  // Halo plus léger et subtil
+  grad.addColorStop(0, 'rgba(255, 213, 74, 0.08)');
+  grad.addColorStop(0.6, 'rgba(255, 213, 74, 0.04)');
+  grad.addColorStop(1, 'rgba(255, 213, 74, 0.0)');
+  ctx.fillStyle = grad;
+  ctx.beginPath(); ctx.arc(cx, cy, outer, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+
+  // Sprite avec légère inclinaison
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate((m.angle || 0) * Math.PI / 180);
+  // Respect du ratio de l'image
+  let w = baseSize;
+  let h = baseSize;
+  if (MINERAL_IMAGE && MINERAL_IMAGE.complete && MINERAL_IMAGE.naturalWidth > 0) {
+    const iw = MINERAL_IMAGE.naturalWidth;
+    const ih = MINERAL_IMAGE.naturalHeight;
+    const ratio = iw / ih;
+    if (ratio >= 1) {
+      w = baseSize;
+      h = baseSize / ratio;
+    } else {
+      h = baseSize;
+      w = baseSize * ratio;
+    }
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(MINERAL_IMAGE, -w/2, -h/2, w, h);
+  } else {
+    // Fallback: galet jaune
+    ctx.fillStyle = '#e7b93b';
+    ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+    ctx.lineWidth = Math.max(1, Math.floor(tile * 0.06));
+    ctx.beginPath();
+    ctx.ellipse(0, 0, w * 0.45, h * 0.35, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  }
   ctx.restore();
 }
 
@@ -4144,6 +4251,95 @@ function computeHQs(numPlayers) {
     result.push({ cx: near.x, cy: near.y, colorKey: state.playerColors[i], hp: 1000, hpMax: 1000, energy: 900, energyMax: 1000 });
   }
   return result;
+}
+
+// --- Gisements: génération ---
+function spawnMinerals() {
+  if (!state.tiles || !state.hqs) return;
+  const minerals = [];
+
+  const margin = 4;
+  const isWall = (x, y) => isInBounds(x, y) && state.tiles[y][x] === true;
+  const inMargin = (x, y) => x >= margin && y >= margin && x < state.cols - margin && y < state.rows - margin;
+  const wallNeighborCount = (x, y) => {
+    let c = 0;
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (dx === 0 && dy === 0) continue;
+        const nx = x + dx, ny = y + dy;
+        if (!isInBounds(nx, ny)) { c++; continue; }
+        if (state.tiles[ny][nx] === true) c++;
+      }
+    }
+    return c;
+  };
+  const isDeepWall = (x, y) => isWall(x, y) && wallNeighborCount(x, y) >= 6;
+  const isValidMineralCell = (x, y) => isDeepWall(x, y) && inMargin(x, y);
+  const chebDist = (x1, y1, x2, y2) => Math.max(Math.abs(x1 - x2), Math.abs(y1 - y2));
+  const tooCloseToMineral = (x, y, minD) => minerals.some(m => Math.hypot(m.x - x, m.y - y) < minD);
+  const tooCloseToHQ = (x, y, pad = 3) => state.hqs.some(h => chebDist(x, y, h.cx, h.cy) <= (HQ_PERIM_RADIUS + pad));
+
+  // 1) Un petit gisement (sur un mur) à proximité de chaque QG
+  for (const hq of state.hqs) {
+    let placed = false;
+    const minR = HQ_BLOCK_HALF_SPAN + 4;
+    const maxR = HQ_BLOCK_HALF_SPAN + 12;
+    // Essaie dans un ordre pseudo-aléatoire autour du QG
+    const dirs = [ [1,0], [1,1], [0,1], [-1,1], [-1,0], [-1,-1], [0,-1], [1,-1] ];
+    for (let r = minR; r <= maxR && !placed; r++) {
+      const startIdx = Math.floor(Math.random() * dirs.length);
+      for (let k = 0; k < dirs.length && !placed; k++) {
+        const d = dirs[(startIdx + k) % dirs.length];
+        const x = hq.cx + d[0] * r;
+        const y = hq.cy + d[1] * r;
+        if (!isValidMineralCell(x, y)) continue;
+        if (tooCloseToMineral(x, y, 3)) continue;
+        minerals.push({
+          id: state.nextMineralId++, x, y,
+          size: 'small', energy: 5000, energyMax: 5000,
+          angle: (Math.random() * 30) - 15,
+        });
+        placed = true;
+      }
+    }
+    // Si non placé, tente balayage local
+    if (!placed) {
+      for (let dy = -6; dy <= 6 && !placed; dy++) {
+        for (let dx = -6; dx <= 6 && !placed; dx++) {
+          const x = hq.cx + dx, y = hq.cy + dy;
+          if (!isValidMineralCell(x, y)) continue;
+          if (chebDist(x, y, hq.cx, hq.cy) <= HQ_BLOCK_HALF_SPAN + 1) continue;
+          if (tooCloseToMineral(x, y, 3)) continue;
+          minerals.push({ id: state.nextMineralId++, x, y, size: 'small', energy: 5000, energyMax: 5000, angle: (Math.random() * 30) - 15 });
+          placed = true;
+        }
+      }
+    }
+  }
+
+  // 2) Quelques gisements aléatoires sur la carte
+  const area = state.cols * state.rows;
+  const target = Math.max(6, Math.min(18, Math.round(area / 400)));
+  const remaining = Math.max(0, target - minerals.length);
+  let tries = 0;
+  while (minerals.length < target && tries < area) {
+    tries++;
+    const x = 1 + Math.floor(Math.random() * (state.cols - 2));
+    const y = 1 + Math.floor(Math.random() * (state.rows - 2));
+    if (!isValidMineralCell(x, y)) continue;
+    if (tooCloseToMineral(x, y, 4)) continue;
+    if (tooCloseToHQ(x, y, 4)) continue;
+    const large = Math.random() < 0.3; // 30% gros gisements
+    minerals.push({
+      id: state.nextMineralId++, x, y,
+      size: large ? 'large' : 'small',
+      energy: large ? 15000 : 5000,
+      energyMax: large ? 15000 : 5000,
+      angle: (Math.random() * 30) - 15,
+    });
+  }
+
+  state.minerals = minerals;
 }
 
 function findOpenCenterNear(tx, ty, minSeparation, placed) {
